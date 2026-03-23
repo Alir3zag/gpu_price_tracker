@@ -26,3 +26,8 @@ EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD", "")
 EMAIL_RECEIVER = os.getenv("EMAIL_RECEIVER", "")
 SMTP_HOST      = "smtp.gmail.com"               # not secret
 SMTP_PORT      = 587                            # not secret
+
+# ── Auth ─────────────────────────────────────────────────────────────────────
+JWT_SECRET     = os.getenv("JWT_SECRET", "changeme-before-deploy")  # sign/verify tokens
+JWT_ALGORITHM  = "HS256"          # hashing algorithm used to sign the token
+JWT_EXPIRE_MIN = 60 * 24          # token lives for 24 hours

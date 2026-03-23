@@ -66,3 +66,18 @@ class UserResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+# ── Auth ─────────────────────────────────────────────────────────────────────
+
+class UserResponse(BaseModel):
+    id:         str
+    email:      str
+    created_at: datetime | None
+
+    model_config = {"from_attributes": True}
+
+# ── Auth ─────────────────────────────────────────────────────────────────────
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type:   str

@@ -9,6 +9,7 @@ from app.schemas import GPUPriceResponse, PriceAlertResponse, UserSettingsUpdate
 from app.scraper import scrape_all
 from app.storage import save_prices, load_latest_prices
 from app.config import SEARCH_QUERIES
+from app.routers import auth as auth_router
 
 
 @asynccontextmanager
@@ -23,6 +24,7 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+app.include_router(auth_router.router)
 
 # ── Scrape ────────────────────────────────────────────────────────────────────
 
