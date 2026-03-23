@@ -5,8 +5,7 @@
 import sqlite3
 import os
 from datetime import datetime
-from config import DB_PATH
-
+from app.config import DB_PATH
 
 def _connect() -> sqlite3.Connection:
     """Open (or create) the SQLite DB and ensure the prices table exists."""
