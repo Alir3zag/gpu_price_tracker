@@ -60,6 +60,8 @@ class PriceAlert(Base):
     old_price  = Column(Float, nullable=False)
     new_price  = Column(Float, nullable=False)
     drop_pct   = Column(Float, nullable=False)
+    score      = Column(Float, default=0.0)
+    grade      = Column(String, default="D")
     link       = Column(String)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     user       = relationship("User", back_populates="alerts")

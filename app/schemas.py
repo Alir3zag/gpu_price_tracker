@@ -26,6 +26,8 @@ class PriceAlertResponse(BaseModel):
     old_price:  float
     new_price:  float
     drop_pct:   float
+    score:      float
+    grade:      str
     link:       str | None
     created_at: datetime | None
 

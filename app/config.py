@@ -5,6 +5,12 @@
 from dotenv import load_dotenv
 import os
 
+
+# API keys for external services — set these in a .env file in the project root
+BESTBUY_API_KEY    = os.getenv("BESTBUY_API_KEY", "")
+EBAY_CLIENT_ID     = os.getenv("EBAY_CLIENT_ID", "")
+EBAY_CLIENT_SECRET = os.getenv("EBAY_CLIENT_SECRET", "")
+
 load_dotenv()  # reads .env file into environment variables
 
 # ── GPUs to search for on Newegg ─────────────────────────────────────────────
