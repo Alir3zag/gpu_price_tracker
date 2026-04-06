@@ -9,6 +9,7 @@ class GPUPriceResponse(BaseModel):
     id:         str
     name:       str
     price:      float
+    currency:   str
     link:       str | None
     query:      str | None
     retailer:   str

@@ -43,11 +43,12 @@ class GPUPrice(Base):
     __tablename__ = "gpu_prices"
 
     id         = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    name       = Column(String, nullable=False)                 # full product name
+    name       = Column(String, nullable=False)
     price      = Column(Float, nullable=False)
+    currency   = Column(String, default="USD")
     link       = Column(String)
-    query      = Column(String)                                 # which search produced this
-    retailer   = Column(String, default="newegg")               # ready for multi-retailer Stage 4
+    query      = Column(String)
+    retailer   = Column(String, default="newegg")
     scraped_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 

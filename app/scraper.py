@@ -1,9 +1,11 @@
 # ============================================================
 # scraper.py — GPU prices from:
-#   Newegg   — scraping (requests + BeautifulSoup)
-#   Walmart  — scraping (curl_cffi TLS impersonation + __NEXT_DATA__ JSON)
-#   eBay     — official Browse API (OAuth2 client credentials)
-#   Best Buy — stub ready, needs business email for API key
+#   Newegg        — scraping (requests + BeautifulSoup) USD
+#   Walmart       — ScraperAPI + __NEXT_DATA__ JSON        USD
+#   Amazon        — ScraperAPI + BeautifulSoup             USD
+#   Kleinanzeigen — ScraperAPI + BeautifulSoup             EUR
+#   eBay          — official Browse API (OAuth2)           USD
+#   Best Buy      — stub, needs business email             USD
 # ============================================================
 
 import re
@@ -12,14 +14,10 @@ import base64
 import requests
 from bs4 import BeautifulSoup
 
-try:
-    import curl_cffi.requests as curl_requests
-    CURL_AVAILABLE = True
-except ImportError:
-    CURL_AVAILABLE = False
-    print("[walmart] curl_cffi not installed — run: pip install curl_cffi")
-
-from app.config import BESTBUY_API_KEY, EBAY_CLIENT_ID, EBAY_CLIENT_SECRET
+from app.config import (
+    BESTBUY_API_KEY, EBAY_CLIENT_ID,
+    EBAY_CLIENT_SECRET, SCRAPERAPI_KEY
+)
 
 HEADERS = {
     "User-Agent": (
@@ -40,20 +38,24 @@ BLOCKLIST_KEYWORDS = [
 
 GPU_ALLOWLIST = [
     "geforce", "radeon", "rtx", "gtx", "rx ", "arc ",
-    "graphics card", "video card", "gpu",
+    "graphics card", "video card", "gpu", "grafikkarte",   # German term
 ]
 
-MIN_PRICE = 150.0
-MAX_PRICE = 5000.0
+MIN_PRICE_USD = 150.0
+MAX_PRICE_USD = 5000.0
+MIN_PRICE_EUR = 140.0
+MAX_PRICE_EUR = 4800.0
 
 
-def is_valid_gpu(name: str, price: float) -> bool:
+def is_valid_gpu(name: str, price: float, currency: str = "USD") -> bool:
     name_lower = name.lower()
     if any(kw in name_lower for kw in BLOCKLIST_KEYWORDS):
         return False
     if not any(term in name_lower for term in GPU_ALLOWLIST):
         return False
-    return MIN_PRICE <= price <= MAX_PRICE
+    min_p = MIN_PRICE_EUR if currency == "EUR" else MIN_PRICE_USD
+    max_p = MAX_PRICE_EUR if currency == "EUR" else MAX_PRICE_USD
+    return min_p <= price <= max_p
 
 
 def parse_price(raw: str) -> float | None:
@@ -61,7 +63,15 @@ def parse_price(raw: str) -> float | None:
     return float(match.group()) if match else None
 
 
-# ── Newegg (scraping) ─────────────────────────────────────────────────────────
+def _scraperapi_get(url: str, extra_params: dict = None) -> requests.Response:
+    """Route any URL through ScraperAPI."""
+    payload = {"api_key": SCRAPERAPI_KEY, "url": url}
+    if extra_params:
+        payload.update(extra_params)
+    return requests.get("https://api.scraperapi.com/", params=payload, timeout=60)
+
+
+# ── Newegg ────────────────────────────────────────────────────────────────────
 
 def scrape_newegg(query: str) -> list[dict]:
     url = f"https://www.newegg.com/p/pl?d={query}&N=4131"
@@ -86,7 +96,7 @@ def scrape_newegg(query: str) -> list[dict]:
         if parsed is None or not is_valid_gpu(name, parsed):
             continue
         results.append({
-            "name": name, "price": parsed,
+            "name": name, "price": parsed, "currency": "USD",
             "link": a_tag["href"], "query": query, "retailer": "newegg",
         })
 
@@ -94,55 +104,57 @@ def scrape_newegg(query: str) -> list[dict]:
     return results
 
 
-# ── Walmart (curl_cffi TLS impersonation + __NEXT_DATA__ JSON) ────────────────
-# Walmart embeds all search result data in a <script id="__NEXT_DATA__"> JSON
-# blob — no fragile CSS selectors needed. curl_cffi impersonates Chrome's TLS
-# fingerprint to avoid the "Robot or Human?" CAPTCHA that blocks plain requests.
+# ── Walmart ───────────────────────────────────────────────────────────────────
 
 def scrape_walmart(query: str) -> list[dict]:
-    if not CURL_AVAILABLE:
-        print("[walmart] Skipping — curl_cffi not installed")
+    if not SCRAPERAPI_KEY:
+        print("[walmart] No SCRAPERAPI_KEY — skipping")
         return []
 
     url = f"https://www.walmart.com/search?q={query.replace(' ', '+')}&cat_id=3944"
 
     try:
-        r = curl_requests.get(url, impersonate="chrome110", timeout=15)
+        r = _scraperapi_get(url, {"country_code": "us"})
         r.raise_for_status()
     except Exception as e:
         print(f"[walmart] Request failed for '{query}': {e}")
         return []
 
     if "Robot or human" in r.text:
-        print(f"[walmart] CAPTCHA triggered for '{query}' — blocked this run")
+        print(f"[walmart] Still blocked for '{query}'")
         return []
 
-    soup    = BeautifulSoup(r.text, "html.parser")
-    script  = soup.find("script", {"id": "__NEXT_DATA__"})
+    soup   = BeautifulSoup(r.text, "html.parser")
+    script = soup.find("script", {"id": "__NEXT_DATA__"})
     if not script:
-        print(f"[walmart] __NEXT_DATA__ not found for '{query}' — page structure may have changed")
+        print(f"[walmart] __NEXT_DATA__ not found for '{query}'")
         return []
 
     try:
-        data = json.loads(script.get_text())
-        # Path to search results inside Walmart's Next.js data blob
-        items = (
+        data      = json.loads(script.get_text())
+        stacks    = (
             data.get("props", {})
                 .get("pageProps", {})
                 .get("initialData", {})
                 .get("searchResult", {})
-                .get("itemStacks", [{}])[0]
-                .get("items", [])
+                .get("itemStacks", [])
         )
-    except (json.JSONDecodeError, IndexError, KeyError) as e:
+        # flatten all stacks and filter to real products only
+        raw_items = []
+        for stack in stacks:
+            for item in stack.get("items", []):
+                if item.get("__typename") == "Product":
+                    raw_items.append(item)
+    except (json.JSONDecodeError, KeyError) as e:
         print(f"[walmart] JSON parse error for '{query}': {e}")
         return []
 
     results = []
-    for item in items:
+    for item in raw_items:
         name  = item.get("name", "")
-        price = item.get("priceInfo", {}).get("currentPrice", {}).get("price")
-        link  = "https://www.walmart.com" + item.get("canonicalUrl", "")
+        price = item.get("price")
+        pid   = item.get("usItemId", "")
+        link  = f"https://www.walmart.com/ip/{pid}" if pid else ""
 
         if not name or price is None:
             continue
@@ -154,7 +166,7 @@ def scrape_walmart(query: str) -> list[dict]:
             continue
 
         results.append({
-            "name": name, "price": price_f,
+            "name": name, "price": price_f, "currency": "USD",
             "link": link, "query": query, "retailer": "walmart",
         })
 
@@ -162,15 +174,138 @@ def scrape_walmart(query: str) -> list[dict]:
     return results
 
 
-# ── Best Buy (official API) — stub, needs business email ─────────────────────
-# Sign up at developer.bestbuy.com once you have a non-Gmail address.
-# Uncomment the body below and add BESTBUY_API_KEY to .env when ready.
+# ── Amazon ────────────────────────────────────────────────────────────────────
+
+def scrape_amazon(query: str) -> list[dict]:
+    if not SCRAPERAPI_KEY:
+        print("[amazon] No SCRAPERAPI_KEY — skipping")
+        return []
+
+    url = f"https://www.amazon.com/s?k={query.replace(' ', '+')}&i=electronics&rh=n%3A284822"
+
+    try:
+        r = _scraperapi_get(url, {"render": "true", "country_code": "us"})
+        r.raise_for_status()
+    except Exception as e:
+        print(f"[amazon] Request failed for '{query}': {e}")
+        return []
+
+    soup  = BeautifulSoup(r.text, "html.parser")
+    items = soup.find_all("div", {"data-component-type": "s-search-result"})
+
+    if not items:
+        print(f"[amazon] No results found for '{query}'")
+        return []
+
+    results = []
+    for item in items:
+        title_tag = item.find("h2")
+        if not title_tag:
+            continue
+        name = title_tag.get_text(strip=True)
+
+        whole = item.find("span", class_="a-price-whole")
+        frac  = item.find("span", class_="a-price-fraction")
+        if not whole:
+            continue
+        try:
+            price_str = whole.get_text(strip=True).replace(",", "").rstrip(".")
+            if frac:
+                price_str += "." + frac.get_text(strip=True)
+            price_f = float(price_str)
+        except (ValueError, AttributeError):
+            continue
+
+        a_tag = item.find("a", class_="a-link-normal", href=True)
+        link  = "https://www.amazon.com" + a_tag["href"] if a_tag else ""
+
+        if not is_valid_gpu(name, price_f):
+            continue
+
+        results.append({
+            "name": name, "price": price_f, "currency": "USD",
+            "link": link, "query": query, "retailer": "amazon",
+        })
+
+    print(f"[amazon] '{query}' → {len(results)} listings")
+    return results
+
+
+# ── Kleinanzeigen (ScraperAPI + German residential proxy) ─────────────────────
+# Germany's largest classifieds platform — used/private GPU listings in EUR.
+
+def scrape_kleinanzeigen(query: str) -> list[dict]:
+    if not SCRAPERAPI_KEY:
+        print("[kleinanzeigen] No SCRAPERAPI_KEY — skipping")
+        return []
+
+    # Translate common English GPU terms to German for better results
+    de_query = (
+        query.replace("graphics card", "grafikkarte")
+             .replace("video card", "grafikkarte")
+    )
+    url = f"https://www.kleinanzeigen.de/s-grafikkarten/{de_query}/k0"
+
+    try:
+        r = _scraperapi_get(url, {"country_code": "de", "render": "false"})
+        r.raise_for_status()
+    except Exception as e:
+        print(f"[kleinanzeigen] Request failed for '{query}': {e}")
+        return []
+
+    if "captcha" in r.text.lower() or "robot" in r.text.lower():
+        print(f"[kleinanzeigen] Blocked for '{query}'")
+        return []
+
+    soup  = BeautifulSoup(r.text, "html.parser")
+    # Each listing is an <article class="aditem">
+    items = soup.find_all("article", class_="aditem")
+
+    if not items:
+        print(f"[kleinanzeigen] No listings found for '{query}' — structure may have changed")
+        return []
+
+    results = []
+    for item in items:
+        title_tag = item.find("a", class_="ellipsis")
+        if not title_tag:
+            continue
+        name = title_tag.get_text(strip=True)
+
+        price_tag = item.find("p", class_=lambda c: c and "price" in c)
+        if not price_tag:
+            continue
+        raw_price = price_tag.get_text(strip=True)
+
+        if "verschenken" in raw_price.lower():
+            continue
+
+        # Parse European price format (e.g. "1.234,56 €")
+        clean = raw_price.replace(".", "").replace(",", ".").replace("€", "").strip()
+        parsed = parse_price(clean)
+        if parsed is None:
+            continue
+
+        href = title_tag.get("href", "")
+        link = f"https://www.kleinanzeigen.de{href}" if href.startswith("/") else href
+
+        if not is_valid_gpu(name, parsed, currency="EUR"):
+            continue
+
+        results.append({
+            "name": name, "price": parsed, "currency": "EUR",
+            "link": link, "query": query, "retailer": "kleinanzeigen",
+        })
+
+    print(f"[kleinanzeigen] '{query}' → {len(results)} listings")
+    return results
+
+
+# ── Best Buy (stub) ───────────────────────────────────────────────────────────
 
 def scrape_bestbuy(query: str) -> list[dict]:
     if not BESTBUY_API_KEY:
-        # Silently skip — no spam on every scrape cycle
         return []
-
     url = (
         f"https://api.bestbuy.com/v1/products"
         f"(search={query}&categoryPath.id=abcat0507002)"
@@ -196,7 +331,7 @@ def scrape_bestbuy(query: str) -> list[dict]:
         if not is_valid_gpu(name, float(price)):
             continue
         results.append({
-            "name": name, "price": float(price),
+            "name": name, "price": float(price), "currency": "USD",
             "link": link, "query": query, "retailer": "bestbuy",
         })
 
@@ -204,9 +339,7 @@ def scrape_bestbuy(query: str) -> list[dict]:
     return results
 
 
-# ── eBay (official Browse API) ────────────────────────────────────────────────
-# Free — sign up at developer.ebay.com, create an app, copy App ID + Secret.
-# Add EBAY_CLIENT_ID and EBAY_CLIENT_SECRET to .env.
+# ── eBay ──────────────────────────────────────────────────────────────────────
 
 _ebay_token: dict = {"value": None}
 
@@ -215,7 +348,7 @@ def _get_ebay_token() -> str | None:
     if _ebay_token["value"]:
         return _ebay_token["value"]
     if not EBAY_CLIENT_ID or not EBAY_CLIENT_SECRET:
-        print("[ebay] No credentials — skipping. Add EBAY_CLIENT_ID + EBAY_CLIENT_SECRET to .env")
+        print("[ebay] No credentials — skipping")
         return None
     credentials = base64.b64encode(
         f"{EBAY_CLIENT_ID}:{EBAY_CLIENT_SECRET}".encode()
@@ -244,7 +377,6 @@ def scrape_ebay(query: str) -> list[dict]:
     token = _get_ebay_token()
     if not token:
         return []
-
     try:
         r = requests.get(
             "https://api.ebay.com/buy/browse/v1/item_summary/search",
@@ -265,9 +397,10 @@ def scrape_ebay(query: str) -> list[dict]:
 
     results = []
     for item in data.get("itemSummaries", []):
-        name  = item.get("title", "")
-        price = item.get("price", {}).get("value")
-        link  = item.get("itemWebUrl", "")
+        name     = item.get("title", "")
+        price    = item.get("price", {}).get("value")
+        currency = item.get("price", {}).get("currency", "USD")
+        link     = item.get("itemWebUrl", "")
         if not name or price is None:
             continue
         try:
@@ -277,7 +410,7 @@ def scrape_ebay(query: str) -> list[dict]:
         if not is_valid_gpu(name, price_f):
             continue
         results.append({
-            "name": name, "price": price_f,
+            "name": name, "price": price_f, "currency": currency,
             "link": link, "query": query, "retailer": "ebay",
         })
 
@@ -291,7 +424,9 @@ def scrape_gpu(query: str) -> list[dict]:
     results = []
     results.extend(scrape_newegg(query))
     results.extend(scrape_walmart(query))
-    results.extend(scrape_bestbuy(query))   # silently skips if no API key
+    results.extend(scrape_amazon(query))
+    results.extend(scrape_kleinanzeigen(query))
+    results.extend(scrape_bestbuy(query))
     results.extend(scrape_ebay(query))
     return results
 

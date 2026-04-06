@@ -3,6 +3,7 @@
 # ============================================================
 
 from dotenv import load_dotenv
+load_dotenv()  # reads .env file into environment variables
 import os
 
 
@@ -10,8 +11,8 @@ import os
 BESTBUY_API_KEY    = os.getenv("BESTBUY_API_KEY", "")
 EBAY_CLIENT_ID     = os.getenv("EBAY_CLIENT_ID", "")
 EBAY_CLIENT_SECRET = os.getenv("EBAY_CLIENT_SECRET", "")
+SCRAPERAPI_KEY     = os.getenv("SCRAPERAPI_KEY", "")
 
-load_dotenv()  # reads .env file into environment variables
 
 # ── GPUs to search for on Newegg ─────────────────────────────────────────────
 SEARCH_QUERIES = ["3090", "3080", "4090"]       # each becomes a separate Newegg search

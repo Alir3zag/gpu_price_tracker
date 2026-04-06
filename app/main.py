@@ -92,6 +92,7 @@ async def run_scrape_cycle(queries: list[str]):
                 session.add(GPUPrice(
                     name     = item["name"],
                     price    = item["price"],
+                    currency = item.get("currency", "USD"),   # ← new
                     link     = item.get("link"),
                     query    = item.get("query"),
                     retailer = item.get("retailer", "unknown"),

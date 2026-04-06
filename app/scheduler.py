@@ -100,9 +100,10 @@ async def scrape_for_user(user_id: str) -> None:
             session.add(GPUPrice(
                 name     = item["name"],
                 price    = item["price"],
+                currency = item.get("currency", "USD"),   # ← new
                 link     = item.get("link"),
                 query    = item.get("query"),
-                retailer = item.get("retailer", "unknown"),  # ← fixed
+                retailer = item.get("retailer", "unknown"),
             ))
         await session.commit()
 

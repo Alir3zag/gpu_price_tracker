@@ -14,8 +14,9 @@ A production-grade REST API that monitors GPU prices across multiple retailers, 
 
 ## Features
 
-- **Multi-retailer scraping** — Newegg (BeautifulSoup), Walmart (curl_cffi TLS impersonation), eBay (official Browse API)
+- **Multi-retailer scraping** — Newegg (BeautifulSoup), Walmart (ScraperAPI), Amazon (ScraperAPI), eBay (official Browse API), Kleinanzeigen stub (EUR, German residential proxy required), Best Buy stub (business API key required)
 - **Smart GPU filtering** — blocklist + allowlist + price range validation eliminates full systems, laptops, and accessories from results
+- **Multi-currency support** — USD and EUR prices stored with currency field, separate validation ranges per currency
 - **Per-user automation** — APScheduler runs each user's scrape on their own configured interval with zero manual triggers
 - **Deal scoring** — every price drop is scored 0–100 and graded A–D across three weighted factors, so the best deals always surface first
 - **JWT authentication** — bcrypt password hashing, 24-hour tokens, protected route dependency injection
@@ -45,14 +46,16 @@ A production-grade REST API that monitors GPU prices across multiple retailers, 
 │   └──────────┘  └──────────┘  └──────────────────────┘ │
 └───────┬───────────────┬────────────────┬────────────────┘
         │               │                │
-┌───────▼───────┐ ┌─────▼──────┐ ┌──────▼──────────────┐
-│  SQLAlchemy   │ │ APScheduler│ │      Scrapers        │
-│  Async ORM    │ │ per-user   │ │                      │
-│  SQLite →     │ │ intervals  │ │  Newegg  (requests)  │
-│  PostgreSQL   │ └────────────┘ │  Walmart (curl_cffi) │
-└───────────────┘                │  eBay    (API)       │
-                                 │  Best Buy(API, stub) │
-                                 └─────────────────────┘
+┌───────▼───────┐ ┌─────▼──────┐ ┌──────▼───────────────────────┐
+│  SQLAlchemy   │ │ APScheduler│ │         Scrapers              │
+│  Async ORM    │ │ per-user   │ │                               │
+│  SQLite →     │ │ intervals  │ │  Newegg        (requests) USD │
+│  PostgreSQL   │ └────────────┘ │  Walmart       (ScraperAPI)USD│
+└───────────────┘                │  Amazon        (ScraperAPI)USD│
+                                 │  eBay          (OAuth2 API)USD│
+                                 │  Kleinanzeigen (stub)      EUR│
+                                 │  Best Buy      (stub)      USD│
+                                 └──────────────────────────────┘
 ```
 
 ---
@@ -80,10 +83,24 @@ Alerts are returned sorted by score descending — best deals always appear firs
 | Backend | FastAPI + SQLAlchemy (async) |
 | Database | SQLite (dev) → PostgreSQL (production) |
 | Auth | JWT (HS256) + bcrypt via passlib |
-| Scraping | requests + BeautifulSoup, curl_cffi |
+| Scraping | requests + BeautifulSoup, ScraperAPI (anti-bot layer) |
 | Retailer APIs | eBay Browse API (OAuth2), Best Buy Products API (stub) |
+| Anti-bot | ScraperAPI — handles Walmart, Amazon, Kleinanzeigen |
 | Scheduler | APScheduler (AsyncIOScheduler) |
 | Deployment | Railway (backend + PostgreSQL) |
+
+---
+
+## Retailer Status
+
+| Retailer | Method | Currency | Status |
+|---|---|---|---|
+| Newegg | requests + BeautifulSoup | USD | ✅ Working |
+| Walmart | ScraperAPI + `__NEXT_DATA__` JSON | USD | ✅ Working |
+| Amazon | ScraperAPI + BeautifulSoup | USD | ✅ Working |
+| eBay | Official Browse API (OAuth2) | USD | ✅ Working |
+| Kleinanzeigen | ScraperAPI + BeautifulSoup | EUR | ⏳ Needs paid ScraperAPI plan (German residential proxy) |
+| Best Buy | Official Products API | USD | ⏳ Needs business email for API key |
 
 ---
 
@@ -116,14 +133,16 @@ Create a `.env` file in the project root:
 DB_PATH=data/prices.db
 
 # Auth
-SECRET_KEY=your-secret-key-here
+JWT_SECRET=your-random-secret-here
 
 # Email alerts (optional)
 EMAIL_SENDER=you@gmail.com
 EMAIL_PASSWORD=your-app-password
-SMTP_HOST=smtp.gmail.com
-SMTP_PORT=587
+EMAIL_RECEIVER=you@gmail.com
 EMAIL_ENABLED=false
+
+# Anti-bot layer — sign up free at scraperapi.com (5000 credits/month trial)
+SCRAPERAPI_KEY=your-scraperapi-key
 
 # Retailer APIs (optional — scrapers skip gracefully if not set)
 EBAY_CLIENT_ID=your-ebay-app-id
@@ -137,7 +156,7 @@ BESTBUY_API_KEY=your-bestbuy-api-key
 uvicorn app.main:app --reload
 ```
 
-API is live at `http://127.0.0.1:8000`
+API is live at `http://127.0.0.1:8000`  
 Interactive docs at `http://127.0.0.1:8000/docs`
 
 ---
@@ -197,14 +216,15 @@ POST /auth/login
 | Method | Endpoint | Auth | Query Params | Description |
 |---|---|---|---|---|
 | POST | `/scrape` | None | — | Manually trigger a scrape (scheduler handles automatic) |
-| GET | `/prices` | None | `query`, `retailer` | Latest price per GPU, filterable |
+| GET | `/prices` | None | `query`, `retailer` | Latest price per GPU, filterable by retailer |
 | GET | `/prices/history` | None | `name` (required) | Full price timeline for one product |
 
 **Filter by retailer:**
 ```
 GET /prices?retailer=newegg
-GET /prices?retailer=ebay
 GET /prices?retailer=walmart
+GET /prices?retailer=amazon
+GET /prices?retailer=ebay
 ```
 
 **Price history:**
@@ -251,11 +271,11 @@ gpu_price_tracker/
 │   ├── main.py              # FastAPI app + price endpoints
 │   ├── scheduler.py         # APScheduler per-user scrape jobs
 │   ├── schemas.py           # Pydantic request/response models
-│   ├── scraper.py           # Newegg, Walmart, eBay, Best Buy scrapers
-│   └── scoring.py           # Deal quality scorer (0–100 + A–D grade)
+│   ├── scraper.py           # multi-retailer scrapers + ScraperAPI integration
+│   └── scoring.py           # deal quality scorer (0–100 + A–D grade)
 ├── data/
-│   └── prices.db            # SQLite database (dev only)
-├── .env                     # Local environment variables (not committed)
+│   └── prices.db            # SQLite database (dev only, not committed)
+├── .env                     # local environment variables (not committed)
 ├── .gitignore
 ├── requirements.txt
 └── README.md
@@ -270,7 +290,7 @@ gpu_price_tracker/
 - [x] Stage 3 — JWT authentication
 - [x] Stage 4 — Per-user settings
 - [x] Stage 5 — APScheduler automation
-- [x] Stage 6 — Multi-retailer scraping (Walmart, eBay, Best Buy stub)
+- [x] Stage 6 — Multi-retailer scraping (Walmart, Amazon, eBay, Kleinanzeigen stub, Best Buy stub)
 - [x] Stage 7 — Deal scoring (0–100, A–D grades)
 - [ ] Stage 8 — Deployment (Railway + PostgreSQL)
 - [ ] Stage 9 — React frontend (Vite + Tailwind + Recharts)
@@ -280,3 +300,5 @@ gpu_price_tracker/
 ---
 
 ## License
+
+MIT
