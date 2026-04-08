@@ -2,6 +2,7 @@
 from collections.abc import AsyncGenerator
 from datetime import datetime, timezone
 import uuid
+import os
 
 from sqlalchemy import Column, String, Float, DateTime, ForeignKey, Boolean, func
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
@@ -9,8 +10,9 @@ from sqlalchemy.orm import DeclarativeBase, relationship
 
 from app.config import DB_PATH
 
-DATABASE_URL = f"sqlite+aiosqlite:///{DB_PATH}"
-
+DATABASE_URL = os.environ.get("DATABASE_URL", f"sqlite+aiosqlite:///{DB_PATH}")
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+asyncpg://", 1)
 
 class Base(DeclarativeBase):
     pass
@@ -68,7 +70,7 @@ class PriceAlert(Base):
     user       = relationship("User", back_populates="alerts")
 
 
-engine        = create_async_engine(DATABASE_URL, echo=True)
+engine        = create_async_engine(DATABASE_URL, echo=False)
 async_session = async_sessionmaker(engine, expire_on_commit=False)
 
 
