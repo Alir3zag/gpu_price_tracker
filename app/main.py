@@ -11,6 +11,7 @@ from app.db import (
 from app.schemas import GPUPriceResponse, PriceAlertResponse
 from app.scraper import scrape_all
 from app.alerts import check_for_drops
+from app.scoring import score_drop, grade
 from app.config import SEARCH_QUERIES
 from app.routers import auth as auth_router
 from app.routers import settings as settings_router
@@ -20,9 +21,9 @@ from app.scheduler import start_scheduler, scheduler
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await create_db_and_tables()
-    await start_scheduler()         # start scheduler on startup
+    await start_scheduler()
     yield
-    scheduler.shutdown()            # clean shutdown when app stops
+    scheduler.shutdown()
     print("[scheduler] Stopped")
 
 
@@ -36,7 +37,7 @@ app.include_router(auth_router.router)
 app.include_router(settings_router.router)
 
 
-# -- Scrape (manual trigger still available) -----------------------------------
+# ── Scrape (manual trigger) ───────────────────────────────────────────────────
 
 @app.post("/scrape", status_code=202)
 async def trigger_scrape(
@@ -85,14 +86,14 @@ async def run_scrape_cycle(queries: list[str]):
             for row in history_rows:
                 price_history.setdefault(row.name, []).append(row.price)
 
-            # ── Step 3: insert new prices with correct retailer ───────────
+            # ── Step 3: insert new prices ─────────────────────────────────
             for item in current:
                 if not item.get("name") or not item.get("price"):
                     continue
                 session.add(GPUPrice(
                     name     = item["name"],
                     price    = item["price"],
-                    currency = item.get("currency", "USD"),   # ← new
+                    currency = item.get("currency", "USD"),
                     link     = item.get("link"),
                     query    = item.get("query"),
                     retailer = item.get("retailer", "unknown"),
@@ -133,7 +134,8 @@ async def run_scrape_cycle(queries: list[str]):
         print(f"[scrape] ERROR: {e}")
         raise
 
-# -- Prices --------------------------------------------------------------------
+
+# ── Prices ────────────────────────────────────────────────────────────────────
 
 @app.get("/prices", response_model=list[GPUPriceResponse])
 async def get_latest_prices(
@@ -141,6 +143,7 @@ async def get_latest_prices(
     retailer: str | None = None,
     session:  AsyncSession = Depends(get_async_session)
 ):
+    # Fetch latest price per GPU (deduped by name, most recent first)
     stmt = select(GPUPrice).order_by(GPUPrice.scraped_at.desc())
     if query:
         stmt = stmt.where(GPUPrice.query == query)
@@ -148,12 +151,66 @@ async def get_latest_prices(
         stmt = stmt.where(GPUPrice.retailer == retailer)
     result = await session.execute(stmt)
     prices = result.scalars().all()
+
     seen, latest = set(), []
     for p in prices:
         if p.name not in seen:
             seen.add(p.name)
             latest.append(p)
-    return latest
+
+    if not latest:
+        return []
+
+    # Fetch full price history for scoring
+    history_result = await session.execute(
+        select(GPUPrice).order_by(GPUPrice.name, GPUPrice.scraped_at.asc())
+    )
+    history_rows = history_result.scalars().all()
+    price_history: dict[str, list[float]] = {}
+    for row in history_rows:
+        price_history.setdefault(row.name, []).append(row.price)
+
+    # Build all_current list for cross-retailer scoring
+    all_current = [{"name": p.name, "price": p.price} for p in latest]
+
+    # Attach score and grade to each result
+    output = []
+    for p in latest:
+        history = price_history.get(p.name, [p.price])
+
+        # Compute drop_pct relative to the highest historical price
+        historical_high = max(history) if history else p.price
+        drop_pct = (
+            ((historical_high - p.price) / historical_high) * 100
+            if historical_high > p.price else 0.0
+        )
+
+        s = score_drop(
+            drop_pct      = drop_pct,
+            price_history = history,
+            current_price = p.price,
+            all_current   = all_current,
+            gpu_name      = p.name,
+        )
+        g = grade(s)
+
+        row = GPUPriceResponse(
+            id         = p.id,
+            name       = p.name,
+            price      = p.price,
+            currency   = p.currency,
+            link       = p.link,
+            query      = p.query,
+            retailer   = p.retailer,
+            scraped_at = p.scraped_at,
+            score      = s,
+            grade      = g,
+        )
+        output.append(row)
+
+    # Return sorted best deals first
+    output.sort(key=lambda x: x.score or 0, reverse=True)
+    return output
 
 
 @app.get("/prices/history", response_model=list[GPUPriceResponse])
@@ -170,11 +227,11 @@ async def get_price_history(
     return history
 
 
-# -- Alerts --------------------------------------------------------------------
+# ── Alerts ────────────────────────────────────────────────────────────────────
 
 @app.get("/alerts", response_model=list[PriceAlertResponse])
 async def get_alerts(session: AsyncSession = Depends(get_async_session)):
     result = await session.execute(
-        select(PriceAlert).order_by(desc(PriceAlert.score))  # best deals first
+        select(PriceAlert).order_by(desc(PriceAlert.score))
     )
     return result.scalars().all()

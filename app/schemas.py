@@ -14,6 +14,8 @@ class GPUPriceResponse(BaseModel):
     query:      str | None
     retailer:   str
     scraped_at: datetime | None
+    score:      float | None = None
+    grade:      str   | None = None
 
     class Config:
         from_attributes = True
@@ -55,14 +57,12 @@ class UserSettingsResponse(BaseModel):
         from_attributes = True
 
 
-# ── Auth (ready for Stage 3) ──────────────────────────────────────────────────
+# ── Auth ──────────────────────────────────────────────────────────────────────
 
 class UserCreate(BaseModel):
     email:    EmailStr
     password: str
 
-
-# ── Auth ─────────────────────────────────────────────────────────────────────
 
 class UserResponse(BaseModel):
     id:         str
@@ -71,7 +71,6 @@ class UserResponse(BaseModel):
 
     model_config = {"from_attributes": True}
 
-# ── Auth ─────────────────────────────────────────────────────────────────────
 
 class TokenResponse(BaseModel):
     access_token: str
