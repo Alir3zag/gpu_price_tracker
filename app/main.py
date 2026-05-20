@@ -1,8 +1,10 @@
 # app/main.py
-from fastapi import FastAPI, HTTPException, Depends, BackgroundTasks
+from fastapi import FastAPI, HTTPException, Depends, BackgroundTasks, Query
+from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc
 from contextlib import asynccontextmanager
+from datetime import datetime
 
 from app.db import (
     create_db_and_tables, get_async_session,
@@ -31,6 +33,17 @@ app = FastAPI(
     title="GPU Price Tracker",
     description="Tracks GPU prices across retailers and alerts on drops",
     lifespan=lifespan
+)
+
+# ── CORS ──────────────────────────────────────────────────────────────────────
+# Allows the React dashboard and Chrome extension to call the API from a browser.
+# In production, replace "*" with your actual frontend domain.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 app.include_router(auth_router.router)
@@ -141,22 +154,39 @@ async def run_scrape_cycle(queries: list[str]):
 async def get_latest_prices(
     query:    str | None = None,
     retailer: str | None = None,
-    session:  AsyncSession = Depends(get_async_session)
+    limit:    int        = Query(default=50, ge=1, le=200),
+    cursor:   str | None = Query(default=None, description="scraped_at timestamp from last result, ISO format"),
+    session:  AsyncSession = Depends(get_async_session),
 ):
-    # Fetch latest price per GPU (deduped by name, most recent first)
+    """
+    Returns the latest price per GPU, sorted by deal score descending.
+
+    Pagination: pass `cursor` (the `scraped_at` of the last item you received)
+    to get the next page. Use `limit` to control page size (default 50, max 200).
+    """
     stmt = select(GPUPrice).order_by(GPUPrice.scraped_at.desc())
     if query:
         stmt = stmt.where(GPUPrice.query == query)
     if retailer:
         stmt = stmt.where(GPUPrice.retailer == retailer)
+    if cursor:
+        try:
+            cursor_dt = datetime.fromisoformat(cursor)
+            stmt = stmt.where(GPUPrice.scraped_at < cursor_dt)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid cursor format. Use ISO datetime.")
+
     result = await session.execute(stmt)
     prices = result.scalars().all()
 
+    # Dedupe to latest price per GPU name
     seen, latest = set(), []
     for p in prices:
         if p.name not in seen:
             seen.add(p.name)
             latest.append(p)
+        if len(latest) >= limit:
+            break
 
     if not latest:
         return []
@@ -170,21 +200,18 @@ async def get_latest_prices(
     for row in history_rows:
         price_history.setdefault(row.name, []).append(row.price)
 
-    # Build all_current list for cross-retailer scoring
+    # Build all_current for cross-retailer scoring
     all_current = [{"name": p.name, "price": p.price} for p in latest]
 
     # Attach score and grade to each result
     output = []
     for p in latest:
         history = price_history.get(p.name, [p.price])
-
-        # Compute drop_pct relative to the highest historical price
         historical_high = max(history) if history else p.price
         drop_pct = (
             ((historical_high - p.price) / historical_high) * 100
             if historical_high > p.price else 0.0
         )
-
         s = score_drop(
             drop_pct      = drop_pct,
             price_history = history,
@@ -193,8 +220,7 @@ async def get_latest_prices(
             gpu_name      = p.name,
         )
         g = grade(s)
-
-        row = GPUPriceResponse(
+        output.append(GPUPriceResponse(
             id         = p.id,
             name       = p.name,
             price      = p.price,
@@ -205,10 +231,8 @@ async def get_latest_prices(
             scraped_at = p.scraped_at,
             score      = s,
             grade      = g,
-        )
-        output.append(row)
+        ))
 
-    # Return sorted best deals first
     output.sort(key=lambda x: x.score or 0, reverse=True)
     return output
 
@@ -216,11 +240,24 @@ async def get_latest_prices(
 @app.get("/prices/history", response_model=list[GPUPriceResponse])
 async def get_price_history(
     name:    str,
-    session: AsyncSession = Depends(get_async_session)
+    limit:   int        = Query(default=100, ge=1, le=500),
+    cursor:  str | None = Query(default=None, description="scraped_at timestamp from last result, ISO format"),
+    session: AsyncSession = Depends(get_async_session),
 ):
-    result = await session.execute(
-        select(GPUPrice).where(GPUPrice.name == name).order_by(GPUPrice.scraped_at.asc())
+    stmt = (
+        select(GPUPrice)
+        .where(GPUPrice.name == name)
+        .order_by(GPUPrice.scraped_at.asc())
     )
+    if cursor:
+        try:
+            cursor_dt = datetime.fromisoformat(cursor)
+            stmt = stmt.where(GPUPrice.scraped_at > cursor_dt)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid cursor format. Use ISO datetime.")
+
+    stmt = stmt.limit(limit)
+    result = await session.execute(stmt)
     history = result.scalars().all()
     if not history:
         raise HTTPException(status_code=404, detail="No price history found for that product")
@@ -230,8 +267,25 @@ async def get_price_history(
 # ── Alerts ────────────────────────────────────────────────────────────────────
 
 @app.get("/alerts", response_model=list[PriceAlertResponse])
-async def get_alerts(session: AsyncSession = Depends(get_async_session)):
-    result = await session.execute(
-        select(PriceAlert).order_by(desc(PriceAlert.score))
-    )
+async def get_alerts(
+    limit:   int        = Query(default=50, ge=1, le=200),
+    cursor:  str | None = Query(default=None, description="created_at timestamp from last result, ISO format"),
+    session: AsyncSession = Depends(get_async_session),
+):
+    """
+    Returns price drop alerts sorted by deal score descending.
+
+    Pagination: pass `cursor` (the `created_at` of the last item you received)
+    to get the next page.
+    """
+    stmt = select(PriceAlert).order_by(desc(PriceAlert.score), desc(PriceAlert.created_at))
+    if cursor:
+        try:
+            cursor_dt = datetime.fromisoformat(cursor)
+            stmt = stmt.where(PriceAlert.created_at < cursor_dt)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid cursor format. Use ISO datetime.")
+
+    stmt = stmt.limit(limit)
+    result = await session.execute(stmt)
     return result.scalars().all()
