@@ -1,11 +1,9 @@
 # ============================================================
 # scraper.py — GPU prices from:
-#   Newegg        — scraping (requests + BeautifulSoup) USD
-#   Walmart       — ScraperAPI + __NEXT_DATA__ JSON        USD
-#   Amazon        — ScraperAPI + BeautifulSoup             USD
-#   Kleinanzeigen — ScraperAPI + BeautifulSoup             EUR
-#   eBay          — official Browse API (OAuth2)           USD
-#   Best Buy      — stub, needs business email             USD
+#   Newegg  — requests + BeautifulSoup          USD
+#   Walmart — ScraperAPI + __NEXT_DATA__ JSON   USD
+#   Amazon  — ScraperAPI + BeautifulSoup        USD
+#   eBay    — official Browse API (OAuth2)       USD
 # ============================================================
 
 import re
@@ -15,7 +13,7 @@ import requests
 from bs4 import BeautifulSoup
 
 from app.config import (
-    BESTBUY_API_KEY, EBAY_CLIENT_ID,
+    EBAY_CLIENT_ID,
     EBAY_CLIENT_SECRET, SCRAPERAPI_KEY
 )
 
@@ -38,24 +36,20 @@ BLOCKLIST_KEYWORDS = [
 
 GPU_ALLOWLIST = [
     "geforce", "radeon", "rtx", "gtx", "rx ", "arc ",
-    "graphics card", "video card", "gpu", "grafikkarte",   # German term
+    "graphics card", "video card", "gpu",
 ]
 
 MIN_PRICE_USD = 150.0
 MAX_PRICE_USD = 5000.0
-MIN_PRICE_EUR = 140.0
-MAX_PRICE_EUR = 4800.0
 
 
-def is_valid_gpu(name: str, price: float, currency: str = "USD") -> bool:
+def is_valid_gpu(name: str, price: float) -> bool:
     name_lower = name.lower()
     if any(kw in name_lower for kw in BLOCKLIST_KEYWORDS):
         return False
     if not any(term in name_lower for term in GPU_ALLOWLIST):
         return False
-    min_p = MIN_PRICE_EUR if currency == "EUR" else MIN_PRICE_USD
-    max_p = MAX_PRICE_EUR if currency == "EUR" else MAX_PRICE_USD
-    return min_p <= price <= max_p
+    return MIN_PRICE_USD <= price <= MAX_PRICE_USD
 
 
 def parse_price(raw: str) -> float | None:
@@ -139,7 +133,6 @@ def scrape_walmart(query: str) -> list[dict]:
                 .get("searchResult", {})
                 .get("itemStacks", [])
         )
-        # flatten all stacks and filter to real products only
         raw_items = []
         for stack in stacks:
             for item in stack.get("items", []):
@@ -231,114 +224,6 @@ def scrape_amazon(query: str) -> list[dict]:
     return results
 
 
-# ── Kleinanzeigen (ScraperAPI + German residential proxy) ─────────────────────
-# Germany's largest classifieds platform — used/private GPU listings in EUR.
-
-def scrape_kleinanzeigen(query: str) -> list[dict]:
-    if not SCRAPERAPI_KEY:
-        print("[kleinanzeigen] No SCRAPERAPI_KEY — skipping")
-        return []
-
-    # Translate common English GPU terms to German for better results
-    de_query = (
-        query.replace("graphics card", "grafikkarte")
-             .replace("video card", "grafikkarte")
-    )
-    url = f"https://www.kleinanzeigen.de/s-grafikkarten/{de_query}/k0"
-
-    try:
-        r = _scraperapi_get(url, {"country_code": "de", "render": "false"})
-        r.raise_for_status()
-    except Exception as e:
-        print(f"[kleinanzeigen] Request failed for '{query}': {e}")
-        return []
-
-    if "captcha" in r.text.lower() or "robot" in r.text.lower():
-        print(f"[kleinanzeigen] Blocked for '{query}'")
-        return []
-
-    soup  = BeautifulSoup(r.text, "html.parser")
-    # Each listing is an <article class="aditem">
-    items = soup.find_all("article", class_="aditem")
-
-    if not items:
-        print(f"[kleinanzeigen] No listings found for '{query}' — structure may have changed")
-        return []
-
-    results = []
-    for item in items:
-        title_tag = item.find("a", class_="ellipsis")
-        if not title_tag:
-            continue
-        name = title_tag.get_text(strip=True)
-
-        price_tag = item.find("p", class_=lambda c: c and "price" in c)
-        if not price_tag:
-            continue
-        raw_price = price_tag.get_text(strip=True)
-
-        if "verschenken" in raw_price.lower():
-            continue
-
-        # Parse European price format (e.g. "1.234,56 €")
-        clean = raw_price.replace(".", "").replace(",", ".").replace("€", "").strip()
-        parsed = parse_price(clean)
-        if parsed is None:
-            continue
-
-        href = title_tag.get("href", "")
-        link = f"https://www.kleinanzeigen.de{href}" if href.startswith("/") else href
-
-        if not is_valid_gpu(name, parsed, currency="EUR"):
-            continue
-
-        results.append({
-            "name": name, "price": parsed, "currency": "EUR",
-            "link": link, "query": query, "retailer": "kleinanzeigen",
-        })
-
-    print(f"[kleinanzeigen] '{query}' → {len(results)} listings")
-    return results
-
-
-# ── Best Buy (stub) ───────────────────────────────────────────────────────────
-
-def scrape_bestbuy(query: str) -> list[dict]:
-    if not BESTBUY_API_KEY:
-        return []
-    url = (
-        f"https://api.bestbuy.com/v1/products"
-        f"(search={query}&categoryPath.id=abcat0507002)"
-        f"?apiKey={BESTBUY_API_KEY}"
-        f"&show=name,salePrice,url,sku"
-        f"&pageSize=10&format=json"
-    )
-    try:
-        r = requests.get(url, timeout=10)
-        r.raise_for_status()
-        data = r.json()
-    except Exception as e:
-        print(f"[bestbuy] Request failed for '{query}': {e}")
-        return []
-
-    results = []
-    for p in data.get("products", []):
-        name  = p.get("name", "")
-        price = p.get("salePrice")
-        link  = p.get("url", "")
-        if not name or price is None:
-            continue
-        if not is_valid_gpu(name, float(price)):
-            continue
-        results.append({
-            "name": name, "price": float(price), "currency": "USD",
-            "link": link, "query": query, "retailer": "bestbuy",
-        })
-
-    print(f"[bestbuy] '{query}' → {len(results)} listings")
-    return results
-
-
 # ── eBay ──────────────────────────────────────────────────────────────────────
 
 _ebay_token: dict = {"value": None}
@@ -425,8 +310,6 @@ def scrape_gpu(query: str) -> list[dict]:
     results.extend(scrape_newegg(query))
     results.extend(scrape_walmart(query))
     results.extend(scrape_amazon(query))
-    results.extend(scrape_kleinanzeigen(query))
-    results.extend(scrape_bestbuy(query))
     results.extend(scrape_ebay(query))
     return results
 
