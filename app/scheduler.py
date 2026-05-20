@@ -1,74 +1,69 @@
 # ============================================================
 # scheduler.py — APScheduler integration
 #
-# Runs a scrape job for every user automatically, each on their
-# own check_interval_hours. Jobs are registered on startup and
-# self-update: every time a job fires it re-reads the user's
-# current settings and reschedules itself if the interval changed.
+# Architecture: two jobs, not one per user.
+#
+#   global_scrape_job   — runs every CHECK_INTERVAL_HOURS
+#                         scrapes all queries from all users (deduplicated)
+#                         saves price data to the shared DB
+#
+#   global_alert_job    — runs after every scrape
+#                         checks each user's alert threshold against new prices
+#                         saves PriceAlert rows per user
+#
+# This replaces the old per-user scrape design where N users tracking
+# the same GPU caused N identical HTTP requests per interval.
 # ============================================================
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
-from sqlalchemy import select
+from sqlalchemy import select, func
 import asyncio
 
 from app.db import async_session, User, UserSettings, GPUPrice, PriceAlert
 from app.scraper import scrape_all
 from app.alerts import check_for_drops
+from app.config import CHECK_INTERVAL_HOURS, SEARCH_QUERIES
 
-# One global scheduler instance — created here, started in main.py lifespan
 scheduler = AsyncIOScheduler()
 
 
-# ── Core scrape job ───────────────────────────────────────────────────────────
+# ── Step 1: scrape shared price data ─────────────────────────────────────────
 
-async def scrape_for_user(user_id: str) -> None:
-    """Full scrape + alert cycle for a single user.
+async def global_scrape_job() -> None:
+    """Scrape GPU prices for all unique queries across all users.
 
-    1. Load user + settings from DB
-    2. Scrape their configured queries
-    3. Fetch previous prices BEFORE inserting new ones
-    4. Fetch full price history for the scorer
-    5. Save new prices with correct retailer field
-    6. Check for drops, score them, save alerts
-    7. Reschedule own job if interval has changed
+    Deduplicates queries so '4090' tracked by 10 users still only
+    triggers one HTTP request. Saves results to the shared gpu_prices table.
+    After saving, immediately triggers alert checks for all users.
     """
+    print("[scheduler] Global scrape started")
+
     async with async_session() as session:
-        # ── 1. Load user + settings ──────────────────────────────────────────
-        user_result = await session.execute(select(User).where(User.id == user_id))
-        user = user_result.scalars().first()
-        if not user:
-            # User was deleted — remove their job and bail
-            job_id = f"scrape_user_{user_id}"
-            if scheduler.get_job(job_id):
-                scheduler.remove_job(job_id)
-            return
+        result = await session.execute(select(UserSettings))
+        all_settings = result.scalars().all()
 
-        settings_result = await session.execute(
-            select(UserSettings).where(UserSettings.user_id == user_id)
-        )
-        settings = settings_result.scalars().first()
-        if not settings:
-            print(f"[scheduler] No settings found for user {user_id}, skipping")
-            return
+    # Collect unique queries from all users + fall back to config defaults
+    user_queries: set[str] = set(SEARCH_QUERIES)
+    for s in all_settings:
+        for q in s.search_queries.split(","):
+            q = q.strip()
+            if q:
+                user_queries.add(q)
 
-        queries       = [q.strip() for q in settings.search_queries.split(",") if q.strip()]
-        interval_hrs  = settings.check_interval_hours
-        print(f"[scheduler] Running scrape for {user.email} | queries={queries} | interval={interval_hrs}h")
+    queries = list(user_queries)
+    print(f"[scheduler] Scraping {len(queries)} unique queries: {queries}")
 
-        # ── 2. Scrape ────────────────────────────────────────────────────────
-        # scrape_all is a sync function — run it in a thread so it doesn't
-        # block the event loop while making HTTP requests
-        loop = asyncio.get_event_loop()
-        current = await loop.run_in_executor(None, scrape_all, queries)
-        print(f"[scheduler] Scraped {len(current)} items for {user.email}")
+    loop = asyncio.get_event_loop()
+    current = await loop.run_in_executor(None, scrape_all, queries)
+    print(f"[scheduler] Scraped {len(current)} items")
 
-        if not current:
-            print(f"[scheduler] No results for {user.email}, skipping save")
-            return
+    if not current:
+        print("[scheduler] No results — skipping save")
+        return
 
-        # ── 3. fetch previous prices BEFORE inserting ────────────────────
-        from sqlalchemy import func
+    async with async_session() as session:
+        # Fetch previous prices BEFORE inserting new ones (for drop detection)
         subq = (
             select(GPUPrice.name, func.max(GPUPrice.scraped_at).label("latest"))
             .group_by(GPUPrice.name)
@@ -84,7 +79,7 @@ async def scrape_for_user(user_id: str) -> None:
         prev_rows = prev_result.scalars().all()
         previous  = {row.name: {"price": row.price, "link": row.link} for row in prev_rows}
 
-        # ── 4. fetch full price history for scorer ───────────────────────
+        # Fetch full price history for scorer
         history_result = await session.execute(
             select(GPUPrice).order_by(GPUPrice.name, GPUPrice.scraped_at.asc())
         )
@@ -93,104 +88,109 @@ async def scrape_for_user(user_id: str) -> None:
         for row in history_rows:
             price_history.setdefault(row.name, []).append(row.price)
 
-        # ── 5. Save raw prices with correct retailer ─────────────────────
+        # Save new prices
         for item in current:
             if not item.get("name") or not item.get("price"):
                 continue
             session.add(GPUPrice(
                 name     = item["name"],
                 price    = item["price"],
-                currency = item.get("currency", "USD"),   # ← new
+                currency = item.get("currency", "USD"),
                 link     = item.get("link"),
                 query    = item.get("query"),
                 retailer = item.get("retailer", "unknown"),
             ))
         await session.commit()
+        print(f"[scheduler] Saved {len(current)} price records")
 
-        # ── 6. Check for drops and save alerts ───────────────────────────
-        drops = check_for_drops(
-            previous      = previous,
-            current       = current,
-            settings      = settings,
-            user_email    = user.email,
-            price_history = price_history,   # ← new
-        )
-        for drop in drops:
-            session.add(PriceAlert(
-                user_id   = user_id,
-                gpu_name  = drop["name"],
-                old_price = drop["old_price"],
-                new_price = drop["new_price"],
-                drop_pct  = drop["drop_pct"],
-                score     = drop["score"],   # ← new
-                grade     = drop["grade"],   # ← new
-                link      = drop["link"],
-            ))
-        await session.commit()
+    # Trigger alert checks immediately after saving
+    await global_alert_job(previous=previous, current=current, price_history=price_history)
 
 
-# ── Registration helpers ──────────────────────────────────────────────────────
+# ── Step 2: fan out alerts to each user ──────────────────────────────────────
 
-def register_user_job(user_id: str, interval_hours: float) -> None:
-    """Add a recurring scrape job for one user.
+async def global_alert_job(
+    previous:      dict,
+    current:       list[dict],
+    price_history: dict[str, list[float]],
+) -> None:
+    """Check every user's alert threshold against the freshly scraped prices.
 
-    Safe to call even if the job already exists — replaces the old one.
-    Called from:
-    - start_scheduler() on app startup (for all existing users)
-    - POST /auth/register (for new users, so they start scraping immediately)
+    Each user only gets alerted on drops that exceed their personal threshold.
+    Scraping is not repeated — data is passed in from global_scrape_job.
     """
-    job_id = f"scrape_user_{user_id}"
+    async with async_session() as session:
+        users_result = await session.execute(select(User))
+        users = users_result.scalars().all()
 
-    if scheduler.get_job(job_id):
-        scheduler.remove_job(job_id)    # replace cleanly rather than duplicate
+        alert_count = 0
+        for user in users:
+            settings_result = await session.execute(
+                select(UserSettings).where(UserSettings.user_id == user.id)
+            )
+            user_settings = settings_result.scalars().first()
 
-    scheduler.add_job(
-        scrape_for_user,
-        trigger=IntervalTrigger(hours=interval_hours),
-        args=[user_id],
-        id=job_id,
-        name=f"Scrape job for user {user_id}",
-        replace_existing=True,
-        max_instances=1,        # never run two scrapes for the same user at once
-    )
-    print(f"[scheduler] Job registered for user {user_id} every {interval_hours}h")
+            drops = check_for_drops(
+                previous      = previous,
+                current       = current,
+                settings      = user_settings,
+                user_email    = user.email,
+                price_history = price_history,
+            )
+            for drop in drops:
+                session.add(PriceAlert(
+                    user_id   = user.id,
+                    gpu_name  = drop["name"],
+                    old_price = drop["old_price"],
+                    new_price = drop["new_price"],
+                    drop_pct  = drop["drop_pct"],
+                    score     = drop["score"],
+                    grade     = drop["grade"],
+                    link      = drop["link"],
+                ))
+                alert_count += 1
+
+        await session.commit()
+        print(f"[scheduler] Alert check done — {len(users)} user(s), {alert_count} alert(s) saved")
+
+
+# ── Registration helpers (kept for auth router compatibility) ─────────────────
+# These no longer control scrape frequency — the global job handles that.
+# They exist so the auth router can still call register_user_job on signup
+# without needing changes, and remove_user_job on account deletion.
+
+def register_user_job(user_id: str, interval_hours: float = 0) -> None:
+    """No-op stub kept for auth router compatibility.
+
+    The global scrape job handles all scraping. Individual user jobs
+    are no longer needed. interval_hours is ignored.
+    """
+    print(f"[scheduler] User {user_id} registered (global job handles scraping)")
 
 
 def remove_user_job(user_id: str) -> None:
-    """Remove a user's scrape job. Call this if a user deletes their account."""
-    job_id = f"scrape_user_{user_id}"
-    if scheduler.get_job(job_id):
-        scheduler.remove_job(job_id)
-        print(f"[scheduler] Job removed for user {user_id}")
+    """No-op stub kept for auth router compatibility."""
+    print(f"[scheduler] User {user_id} removed (no individual job to clean up)")
 
 
 # ── Startup ───────────────────────────────────────────────────────────────────
 
 async def start_scheduler() -> None:
-    """Load all users from DB and register a scrape job for each one.
+    """Start the global scrape job on a fixed interval.
 
-    Called from main.py lifespan on app startup. Starts the APScheduler
-    instance then seeds it with one job per existing user.
-
-    New users registered after startup get their job added immediately
-    via register_user_job() called from the /auth/register endpoint.
+    Called from main.py lifespan on app startup.
+    One job scrapes all queries, then fans out alerts to all users.
     """
     scheduler.start()
     print("[scheduler] Started")
 
-    async with async_session() as session:
-        result = await session.execute(select(User))
-        users  = result.scalars().all()
-
-    for user in users:
-        # Load each user's settings to get their interval
-        async with async_session() as session:
-            settings_result = await session.execute(
-                select(UserSettings).where(UserSettings.user_id == user.id)
-            )
-            settings = settings_result.scalars().first()
-
-        interval = settings.check_interval_hours if settings else 6.0
-        register_user_job(user.id, interval)
-
-    print(f"[scheduler] {len(users)} job(s) registered on startup")
+    scheduler.add_job(
+        global_scrape_job,
+        trigger=IntervalTrigger(hours=CHECK_INTERVAL_HOURS),
+        id="global_scrape",
+        name="Global GPU price scrape",
+        replace_existing=True,
+        max_instances=1,    # never overlap — if a scrape is still running, skip the next fire
+    )
+    print(f"[scheduler] Global scrape job registered — every {CHECK_INTERVAL_HOURS}h")
+    print("[scheduler] 0 job(s) registered on startup")  # kept for log consistency
