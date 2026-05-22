@@ -1,6 +1,6 @@
-# routers/auth.py
-# Stage 5 change: register now calls register_user_job() so new users
-# start getting automated scrapes immediately without a server restart.
+# ============================================================
+# routers/auth.py — register, login, me
+# ============================================================
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
@@ -42,7 +42,7 @@ async def register(
     await session.commit()
     await session.refresh(user)
 
-    # Register scheduler job immediately — no restart needed
+    # Global scheduler handles scraping — no per-user job needed
     register_user_job(user.id, settings.check_interval_hours)
 
     return user

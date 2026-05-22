@@ -43,7 +43,7 @@ def check_for_drops(
     current:       list[dict],
     settings=None,
     user_email:    str = "",
-    price_history: dict = None,     # {gpu_name: [price, price, ...]} oldest first
+    price_history: dict = None,
 ) -> list[dict]:
     """Compare current scrape against previous prices and alert on drops.
 
@@ -81,6 +81,8 @@ def check_for_drops(
         drop_pct = ((old_price - new_price) / old_price) * 100
 
         if drop_pct >= threshold:
+            link = item.get("link", "")
+
             # ── Score this drop ───────────────────────────────────────────
             deal_score = score_drop(
                 drop_pct      = drop_pct,
@@ -91,7 +93,7 @@ def check_for_drops(
             )
             deal_grade = get_grade(deal_score)
 
-            _console_alert(name, old_price, new_price, item["link"], drop_pct, deal_score, deal_grade)
+            _console_alert(name, old_price, new_price, link, drop_pct, deal_score, deal_grade)
 
             if email_enabled and receiver:
                 subject = f"[{deal_grade}] GPU Deal: {name} dropped {drop_pct:.1f}%"
@@ -101,7 +103,7 @@ def check_for_drops(
                     f"Old     : ${old_price:.2f}\n"
                     f"New     : ${new_price:.2f}\n"
                     f"Drop    : {drop_pct:.1f}%\n"
-                    f"Link    : {item['link']}"
+                    f"Link    : {link}"
                 )
                 _send_email(subject, body, receiver)
 
@@ -112,7 +114,7 @@ def check_for_drops(
                 "drop_pct":  round(drop_pct, 2),
                 "score":     deal_score,
                 "grade":     deal_grade,
-                "link":      item["link"],
+                "link":      link,
             })
 
     return drops
