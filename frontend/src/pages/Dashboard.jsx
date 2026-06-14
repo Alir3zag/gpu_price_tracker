@@ -5,136 +5,92 @@ import { getAlerts } from '../api/alerts'
 import GradeBadge from '../components/GradeBadge'
 import { Spinner } from '../components/Skeleton'
 import { useToast } from '../components/Toast'
-import { formatPrice, formatDate } from '../utils/formatters'
+import { formatPrice, formatDate, shortGPUName } from '../utils/formatters'
+import {
+  BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell
+} from 'recharts'
 
+// ── Stat card ────────────────────────────────────────────────────────────────
 function StatCard({ label, value, sub, accent }) {
   return (
     <div className="card" style={{ padding: '18px 20px', flex: 1 }}>
-      <div style={{
-        fontSize: 10, color: 'var(--text-muted)', fontWeight: 600,
-        letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 8,
-      }}>
+      <div style={{ fontSize: 10, color: 'var(--text-muted)', fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 8 }}>
         {label}
       </div>
-      <div style={{
-        fontFamily: 'JetBrains Mono, monospace',
-        fontSize: 24, fontWeight: 600,
-        color: accent || 'var(--text-primary)',
-        marginBottom: 3,
-      }}>
+      <div style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 24, fontWeight: 600, color: accent || 'var(--text-primary)', marginBottom: 3 }}>
         {value}
       </div>
       {sub && (
-        <div style={{
-          fontSize: 11, color: 'var(--text-muted)',
-          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-        }}>{sub}</div>
+        <div style={{ fontSize: 11, color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {sub}
+        </div>
       )}
     </div>
   )
 }
 
-function shortName(name) {
-  if (!name) return '—'
-  return name
-    .replace(/PCI Express \d+\.\d+/gi, '')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, 52)
-}
-
-// Best deal card — shows top scored current prices
+// ── Best deal card ────────────────────────────────────────────────────────────
 function BestDealCard({ price }) {
-  const dropLabel = price.score >= 80 ? 'Exceptional deal'
+  const dealLabel = price.score >= 80 ? 'Exceptional deal'
     : price.score >= 60 ? 'Good deal'
-    : price.score >= 40 ? 'Fair deal'
-    : 'Below average'
+    : 'Fair deal'
+
+  const scoreColor = price.score >= 80 ? 'var(--grade-a)'
+    : price.score >= 60 ? 'var(--grade-b)'
+    : 'var(--grade-c)'
 
   return (
-    <div style={{
-      padding: '14px 16px',
-      borderBottom: '1px solid var(--border)',
-      display: 'flex', alignItems: 'center', gap: 14,
-    }}>
-      <GradeBadge grade={price.grade} pulse={price.grade === 'A'} />
-
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{
-          fontSize: 12, fontWeight: 600,
-          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-          color: 'var(--text-primary)', marginBottom: 3,
-        }} title={price.name}>
-          {shortName(price.name)}
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span style={{
-            fontSize: 10, fontWeight: 600,
-            color: price.grade === 'A' ? 'var(--grade-a)'
-              : price.grade === 'B' ? 'var(--grade-b)'
-              : 'var(--text-muted)',
-            textTransform: 'uppercase', letterSpacing: '0.05em',
-          }}>
-            {dropLabel}
-          </span>
-          <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>·</span>
-          <span style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'capitalize' }}>
-            {price.retailer}
-          </span>
+    <div style={{ padding: '13px 16px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 12 }}>
+      {/* Grade + score stacked */}
+      <div style={{ textAlign: 'center', flexShrink: 0, width: 48 }}>
+        <GradeBadge grade={price.grade} pulse={price.grade === 'A'} />
+        <div style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 11, color: scoreColor, fontWeight: 700, marginTop: 4 }}>
+          {Math.round(price.score)}/100
         </div>
       </div>
 
+      {/* Name + meta */}
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 2 }} title={price.name}>
+          {shortGPUName(price.name)}
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <span style={{ fontSize: 10, fontWeight: 600, color: scoreColor, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+            {dealLabel}
+          </span>
+          <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>· {price.retailer}</span>
+        </div>
+      </div>
+
+      {/* Price + buy */}
       <div style={{ textAlign: 'right', flexShrink: 0 }}>
-        <div style={{
-          fontFamily: 'JetBrains Mono, monospace',
-          fontSize: 15, fontWeight: 700,
-          color: 'var(--text-primary)',
-        }}>
+        <div style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 15, fontWeight: 700, color: 'var(--text-primary)' }}>
           {formatPrice(price.price, price.currency)}
         </div>
-        <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>
-          Score {Math.round(price.score)}
-        </div>
+        {price.link && (
+          <a href={price.link} target="_blank" rel="noopener noreferrer" style={{
+            display: 'inline-block', marginTop: 4,
+            padding: '3px 8px',
+            background: 'var(--accent-dim)', border: '1px solid rgba(245,166,35,0.3)',
+            color: 'var(--accent)', borderRadius: 4, fontSize: 10, fontWeight: 600, textDecoration: 'none',
+          }}>
+            Buy ↗
+          </a>
+        )}
       </div>
-
-      {price.link && (
-        <a
-          href={price.link}
-          target="_blank"
-          rel="noopener noreferrer"
-          style={{
-            padding: '5px 10px',
-            background: 'var(--accent-dim)',
-            border: '1px solid rgba(245,166,35,0.3)',
-            color: 'var(--accent)',
-            borderRadius: 5,
-            fontSize: 11, fontWeight: 600,
-            textDecoration: 'none', flexShrink: 0,
-          }}
-        >
-          Buy ↗
-        </a>
-      )}
     </div>
   )
 }
 
-// Recent alert row — what changed since last scrape
+// ── Alert row ─────────────────────────────────────────────────────────────────
 function AlertRow({ alert }) {
   return (
-    <div style={{
-      padding: '12px 16px',
-      borderBottom: '1px solid var(--border)',
-      display: 'flex', alignItems: 'center', gap: 12,
-    }}>
+    <div style={{ padding: '11px 16px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 10 }}>
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{
-          fontSize: 12, fontWeight: 500,
-          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-          color: 'var(--text-primary)',
-        }} title={alert.gpu_name}>
-          {shortName(alert.gpu_name)}
+        <div style={{ fontSize: 12, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--text-primary)', marginBottom: 2 }} title={alert.gpu_name}>
+          {shortGPUName(alert.gpu_name)}
         </div>
-        <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2, textTransform: 'capitalize' }}>
+        <div style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'capitalize' }}>
           {alert.retailer} · {formatDate(alert.created_at)}
         </div>
       </div>
@@ -148,17 +104,80 @@ function AlertRow({ alert }) {
       </div>
       <GradeBadge grade={alert.grade} />
       {alert.link && (
-        <a
-          href={alert.link}
-          target="_blank"
-          rel="noopener noreferrer"
-          style={{ color: 'var(--accent)', fontSize: 13, textDecoration: 'none', flexShrink: 0 }}
-        >↗</a>
+        <a href={alert.link} target="_blank" rel="noopener noreferrer"
+          style={{ color: 'var(--accent)', fontSize: 13, textDecoration: 'none', flexShrink: 0 }}>↗</a>
       )}
     </div>
   )
 }
 
+// ── Alerts summary (when few alerts exist) ────────────────────────────────────
+function AlertsSummary({ alerts }) {
+  const gradeCounts = { A: 0, B: 0, C: 0, D: 0 }
+  alerts.forEach(a => { if (gradeCounts[a.grade] !== undefined) gradeCounts[a.grade]++ })
+
+  const chartData = [
+    { grade: 'A', count: gradeCounts.A, color: 'var(--grade-a)' },
+    { grade: 'B', count: gradeCounts.B, color: 'var(--grade-b)' },
+    { grade: 'C', count: gradeCounts.C, color: 'var(--grade-c)' },
+    { grade: 'D', count: gradeCounts.D, color: 'var(--grade-d)' },
+  ]
+
+  const totalAlerts = alerts.length
+  const avgDrop = totalAlerts
+    ? (alerts.reduce((s, a) => s + (a.drop_pct || 0), 0) / totalAlerts).toFixed(1)
+    : 0
+  const bestScore = totalAlerts
+    ? Math.round(Math.max(...alerts.map(a => a.score || 0)))
+    : 0
+
+  return (
+    <div style={{ padding: '16px' }}>
+      {/* Mini stats */}
+      <div style={{ display: 'flex', gap: 0, marginBottom: 16 }}>
+        {[
+          { label: 'Total', value: totalAlerts },
+          { label: 'Avg Drop', value: `${avgDrop}%` },
+          { label: 'Best Score', value: bestScore },
+        ].map(({ label, value }) => (
+          <div key={label} style={{ flex: 1, textAlign: 'center', padding: '10px 8px', background: 'var(--bg-base)', borderRadius: 6, margin: '0 3px' }}>
+            <div style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: 16, fontWeight: 700, color: 'var(--accent)' }}>{value}</div>
+            <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2, textTransform: 'uppercase', letterSpacing: '0.06em' }}>{label}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Bar chart — alerts by grade */}
+      <div style={{ fontSize: 11, color: 'var(--text-muted)', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: 8 }}>
+        Alerts by Grade
+      </div>
+      <ResponsiveContainer width="100%" height={90}>
+        <BarChart data={chartData} margin={{ top: 0, right: 4, bottom: 0, left: -20 }}>
+          <XAxis dataKey="grade" tick={{ fill: 'var(--text-muted)', fontSize: 11 }} axisLine={false} tickLine={false} />
+          <YAxis tick={{ fill: 'var(--text-muted)', fontSize: 10 }} axisLine={false} tickLine={false} allowDecimals={false} />
+          <Tooltip
+            cursor={{ fill: 'rgba(255,255,255,0.04)' }}
+            content={({ active, payload }) => {
+              if (!active || !payload?.length) return null
+              return (
+                <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border-light)', borderRadius: 6, padding: '6px 10px', fontSize: 12 }}>
+                  Grade {payload[0].payload.grade}: <strong>{payload[0].value}</strong> alert{payload[0].value !== 1 ? 's' : ''}
+                </div>
+              )
+            }}
+          />
+          <Bar dataKey="count" radius={[3, 3, 0, 0]}>
+            {chartData.map((entry, i) => (
+              <Cell key={i} fill={entry.color} fillOpacity={0.85} />
+            ))}
+          </Bar>
+        </BarChart>
+      </ResponsiveContainer>
+    </div>
+  )
+}
+
+// ── Main Dashboard ─────────────────────────────────────────────────────────────
 export default function Dashboard() {
   const [prices, setPrices] = useState([])
   const [alerts, setAlerts] = useState([])
@@ -183,7 +202,7 @@ export default function Dashboard() {
   const loadAlerts = useCallback(async () => {
     setAlertsLoading(true)
     try {
-      const { data } = await getAlerts({ limit: 6 })
+      const { data } = await getAlerts({ limit: 20 })
       setAlerts(data)
     } catch {
       toast.error('Failed to load alerts')
@@ -219,19 +238,19 @@ export default function Dashboard() {
     }
   }
 
-  // Stats
   const totalGPUs = prices.length
   const lowestToday = prices.length ? Math.min(...prices.map(p => p.price)) : null
   const lowestGPU = prices.find(p => p.price === lowestToday)
   const lastScrape = prices.length ? prices[0]?.scraped_at : null
-
-  // Best deals = top 5 prices by score (already sorted by backend)
   const bestDeals = prices.filter(p => p.score && p.score >= 40).slice(0, 5)
+  const recentAlerts = alerts
+  .filter((a, i, arr) => arr.findIndex(x => x.gpu_name === a.gpu_name) === i)
+  .slice(0, 5)
 
   return (
     <div>
       {/* Header */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 24 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 22 }}>
         <h1 style={{ fontSize: 20, fontWeight: 700 }}>Dashboard</h1>
         <button
           onClick={handleScrape}
@@ -240,31 +259,22 @@ export default function Dashboard() {
             padding: '9px 16px',
             background: scraping ? 'var(--accent-dim)' : 'var(--accent)',
             color: scraping ? 'var(--accent)' : '#0D0F14',
-            fontWeight: 600,
-            border: '1px solid var(--accent)',
-            borderRadius: 7,
-            display: 'flex', alignItems: 'center', gap: 7,
-            fontSize: 13,
-            cursor: scraping ? 'default' : 'pointer',
+            fontWeight: 600, border: '1px solid var(--accent)',
+            borderRadius: 7, display: 'flex', alignItems: 'center', gap: 7,
+            fontSize: 13, cursor: scraping ? 'default' : 'pointer',
           }}
         >
-          {scraping
-            ? <><Spinner size={12} /> Refreshing in {countdown}s…</>
-            : '▶ Run Scrape'}
+          {scraping ? <><Spinner size={12} /> Refreshing in {countdown}s…</> : '▶ Run Scrape'}
         </button>
       </div>
 
       {/* Stat cards */}
-      <div style={{ display: 'flex', gap: 12, marginBottom: 24 }}>
+      <div style={{ display: 'flex', gap: 12, marginBottom: 20 }}>
+        <StatCard label="GPUs Tracked" value={pricesLoading ? '—' : totalGPUs} sub="unique listings" />
         <StatCard
-          label="GPUs Tracked"
-          value={pricesLoading ? '—' : totalGPUs}
-          sub="unique listings"
-        />
-        <StatCard
-          label="Best Price Today"
+          label="Cheapest Listing"
           value={pricesLoading || !lowestToday ? '—' : formatPrice(lowestToday)}
-          sub={lowestGPU ? shortName(lowestGPU.name) : ''}
+          sub={lowestGPU ? shortGPUName(lowestGPU.name) : ''}
           accent="var(--accent)"
         />
         <StatCard
@@ -280,23 +290,17 @@ export default function Dashboard() {
         />
       </div>
 
-      {/* Two column layout */}
+      {/* Two columns */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
 
-        {/* Left: Best Deals Right Now */}
+        {/* Left: Best Deals */}
         <div className="card">
-          <div style={{
-            padding: '13px 16px',
-            borderBottom: '1px solid var(--border)',
-            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-          }}>
+          <div style={{ padding: '13px 16px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <div>
               <div style={{ fontWeight: 600, fontSize: 13 }}>🔥 Best Deals Right Now</div>
-              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
-                Highest-scored listings across all retailers
-              </div>
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>Highest-scored listings · score = 0–100</div>
             </div>
-            <div style={{ display: 'flex', gap: 8, fontSize: 10, color: 'var(--text-muted)' }}>
+            <div style={{ display: 'flex', gap: 8, fontSize: 10 }}>
               <span style={{ color: 'var(--grade-a)' }}>A 80+</span>
               <span style={{ color: 'var(--grade-b)' }}>B 60+</span>
               <span style={{ color: 'var(--grade-c)' }}>C 40+</span>
@@ -314,7 +318,7 @@ export default function Dashboard() {
             </div>
           ) : bestDeals.length === 0 ? (
             <div style={{ padding: '32px 16px', textAlign: 'center', color: 'var(--text-muted)', fontSize: 13 }}>
-              No deals scored yet — run a scrape to find opportunities.
+              No scored deals yet — run a scrape to find opportunities.
             </div>
           ) : (
             bestDeals.map((p, i) => <BestDealCard key={i} price={p} />)
@@ -327,27 +331,19 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* Right: Recent Price Drops */}
+        {/* Right: Recent drops + chart */}
         <div className="card">
-          <div style={{
-            padding: '13px 16px',
-            borderBottom: '1px solid var(--border)',
-            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-          }}>
+          <div style={{ padding: '13px 16px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <div>
               <div style={{ fontWeight: 600, fontSize: 13 }}>Recent Price Drops</div>
-              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
-                Prices that fell since last scrape
-              </div>
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>Prices that fell since last scrape</div>
             </div>
-            <Link to="/alerts" style={{ fontSize: 12, color: 'var(--accent)', textDecoration: 'none' }}>
-              View all →
-            </Link>
+            <Link to="/alerts" style={{ fontSize: 12, color: 'var(--accent)', textDecoration: 'none' }}>View all →</Link>
           </div>
 
           {alertsLoading ? (
             <div style={{ padding: 20 }}>
-              {Array.from({ length: 4 }).map((_, i) => (
+              {Array.from({ length: 3 }).map((_, i) => (
                 <div key={i} style={{ marginBottom: 14 }}>
                   <div className="skeleton" style={{ height: 13, width: '65%', marginBottom: 6 }} />
                   <div className="skeleton" style={{ height: 10, width: '35%' }} />
@@ -356,10 +352,17 @@ export default function Dashboard() {
             </div>
           ) : alerts.length === 0 ? (
             <div style={{ padding: '32px 16px', textAlign: 'center', color: 'var(--text-muted)', fontSize: 13 }}>
-              No price drops detected yet. Run a second scrape to compare prices.
+              No price drops detected yet.<br />
+              <span style={{ fontSize: 11, marginTop: 6, display: 'block' }}>
+                Run a second scrape to compare prices.
+              </span>
             </div>
           ) : (
-            alerts.map(a => <AlertRow key={a.id} alert={a} />)
+            <>
+              {recentAlerts.map(a => <AlertRow key={a.id} alert={a} />)}
+              {/* Summary + chart when we have data */}
+              <AlertsSummary alerts={alerts} />
+            </>
           )}
 
           <div style={{ padding: '10px 16px', borderTop: '1px solid var(--border)' }}>

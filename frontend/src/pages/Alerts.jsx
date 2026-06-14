@@ -3,15 +3,12 @@ import { getAlerts } from '../api/alerts'
 import GradeBadge from '../components/GradeBadge'
 import { SkeletonRow } from '../components/Skeleton'
 import { useToast } from '../components/Toast'
-import { formatPrice, formatDate } from '../utils/formatters'
+import { formatPrice, formatDate, shortGPUName } from '../utils/formatters'
 
 const GRADE_OPTS = ['All', 'A', 'B', 'C', 'D']
 const RETAILER_OPTS = ['All', 'newegg', 'walmart', 'amazon', 'ebay']
 
-function shortName(name) {
-  if (!name) return '—'
-  return name.replace(/PCI Express \d+\.\d+/gi, '').replace(/\s+/g, ' ').trim().slice(0, 55)
-}
+
 
 export default function Alerts() {
   const [alerts, setAlerts] = useState([])
@@ -138,7 +135,7 @@ export default function Alerts() {
                         overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                         maxWidth: 260,
                       }}>
-                        {shortName(a.gpu_name)}
+                        {shortGPUName(a.gpu_name)}
                       </div>
                     </td>
                     <td style={{ fontSize: 12, color: 'var(--text-secondary)', textTransform: 'capitalize' }}>

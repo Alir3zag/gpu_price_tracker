@@ -3,7 +3,7 @@ import { getPrices, getPriceHistory } from '../api/prices'
 import GradeBadge from '../components/GradeBadge'
 import { SkeletonRow, Spinner } from '../components/Skeleton'
 import { useToast } from '../components/Toast'
-import { formatPrice, formatDate, formatDateShort } from '../utils/formatters'
+import { formatPrice, formatDate, formatDateShort, shortGPUName } from '../utils/formatters'
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, Legend
@@ -15,17 +15,7 @@ const RETAILER_COLORS = {
 }
 const PAGE_SIZE = 20
 
-// Shorten long GPU names for display
-function shortName(name) {
-  if (!name) return '—'
-  // Strip common filler words to keep the meaningful part
-  return name
-    .replace(/PCI Express \d+\.\d+/gi, '')
-    .replace(/GDDR\d+X?/gi, s => s) // keep GDDR
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, 60)
-}
+
 
 function PriceHistoryModal({ gpu, onClose }) {
   const [history, setHistory] = useState([])
@@ -92,7 +82,7 @@ function PriceHistoryModal({ gpu, onClose }) {
         <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 18 }}>
           <div>
             <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 3 }} title={gpu}>
-              {shortName(gpu)}
+              {shortGPUName(gpu)}
             </div>
             <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Price history across all retailers</div>
           </div>
@@ -245,7 +235,7 @@ export default function Prices() {
                         overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                         maxWidth: 320,
                       }}>
-                        {shortName(p.name)}
+                        {shortGPUName(p.name)}
                       </div>
                     </td>
                     <td>

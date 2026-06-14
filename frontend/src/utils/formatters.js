@@ -39,3 +39,52 @@ export const gradeBg = (grade) => {
 }
 
 export const capitalize = (s) => s ? s.charAt(0).toUpperCase() + s.slice(1) : ''
+
+// Extract a short, human-readable GPU model name from a full product title
+// e.g. "ASUS TUF Gaming GeForce RTX 4090 24GB GDDR6X PCIe 4.0..." → "RTX 4090 TUF Gaming"
+export const shortGPUName = (name) => {
+  if (!name) return '—'
+
+  // Extract GPU model number
+  const modelMatch = name.match(/(?:RTX|GTX|RX|Arc)\s*\d{3,4}(?:\s*Ti|\s*XT|\s*XTX|\s*SUPER)?/i)
+  const model = modelMatch ? modelMatch[0].replace(/\s+/g, ' ').trim() : null
+
+  // Extract brand qualifier (ROG Strix, TUF Gaming, AORUS, SUPRIM, etc.)
+  const qualifiers = [
+    'ROG Strix', 'ROG STRIX', 'TUF Gaming', 'AORUS', 'SUPRIM', 'Ventus',
+    'Gaming X', 'Gaming OC', 'GAMING OC', 'Founders Edition', 'FTW3',
+    'WINDFORCE', 'Eagle', 'Vision', 'VERTO', 'Trinity',
+  ]
+  let qualifier = null
+  for (const q of qualifiers) {
+    if (name.includes(q)) { qualifier = q; break }
+  }
+
+  // OC / White / Master suffix
+  const suffixes = []
+  if (/\bWhite\b/i.test(name)) suffixes.push('White')
+  if (/\bOC\b|\bO\d+G\b/i.test(name)) suffixes.push('OC')
+  if (/\bMaster\b/i.test(name)) suffixes.push('Master')
+  if (/\bXTREME\b/i.test(name)) suffixes.push('Xtreme')
+  if (/\bWATERFORCE\b/i.test(name)) suffixes.push('WF')
+  if (/\bRefurbished\b/i.test(name)) suffixes.push('Refurb')
+
+  if (model) {
+    const parts = [model]
+    if (qualifier) parts.push(qualifier)
+    parts.push(...suffixes)
+    return parts.join(' ').slice(0, 40)
+  }
+
+  // Fallback: strip filler and truncate
+  return name
+    .replace(/GeForce\s*/gi, '')
+    .replace(/Graphics Card.*/gi, '')
+    .replace(/Video Card.*/gi, '')
+    .replace(/PCI Express.*$/gi, '')
+    .replace(/GDDR\d+X?\s*\d*GB/gi, '')
+    .replace(/\d+GB\s*/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 40)
+}
