@@ -29,9 +29,9 @@ def _send_email(subject: str, body: str, receiver: str) -> None:
         print(f"[alerts] Email failed: {e}")
 
 
-def _console_alert(name: str, old: float, new: float, link: str, drop_pct: float, score: float, grade: str) -> None:
+def _console_alert(name: str, old: float, new: float, link: str, drop_pct: float, score: float, grade: str, retailer: str) -> None:
     print(f"\n{'='*60}")
-    print(f"  PRICE DROP  |  Score: {score}/100  |  Grade: {grade}")
+    print(f"  PRICE DROP  |  Score: {score}/100  |  Grade: {grade}  |  {retailer}")
     print(f"  {name}")
     print(f"  ${old:.2f}  →  ${new:.2f}  ({drop_pct:.1f}% drop)")
     print(f"  {link}")
@@ -48,16 +48,15 @@ def check_for_drops(
     """Compare current scrape against previous prices and alert on drops.
 
     Args:
-        previous:      {name: {price, link}} from last scrape
+        previous:      {name: {price, link, retailer}} from last scrape
         current:       [{name, price, link, query, retailer}] from scraper
         settings:      UserSettings ORM object — overrides global thresholds
         user_email:    To: address for email alerts
         price_history: {name: [float]} — all historical prices per GPU,
-                       used by scorer for rarity calculation. If None,
-                       scorer uses neutral rarity score (50).
+                       used by scorer for rarity calculation.
 
     Returns:
-        List of drop dicts, each with score and grade attached.
+        List of drop dicts, each with score, grade, and retailer attached.
     """
     threshold     = settings.alert_threshold if settings else ALERT_THRESHOLD_PERCENT
     email_enabled = settings.email_enabled   if settings else EMAIL_ENABLED
@@ -65,10 +64,20 @@ def check_for_drops(
     history       = price_history or {}
 
     drops = []
+    seen  = set()  # deduplicate — one alert per GPU name per scrape cycle
 
+    # Use the lowest current price per GPU name for comparison
+    best_current: dict[str, dict] = {}
     for item in current:
-        name = item["name"]
+        name = item.get("name")
+        if not name:
+            continue
+        if name not in best_current or item["price"] < best_current[name]["price"]:
+            best_current[name] = item
 
+    for name, item in best_current.items():
+        if name in seen:
+            continue
         if name not in previous:
             continue
 
@@ -81,7 +90,9 @@ def check_for_drops(
         drop_pct = ((old_price - new_price) / old_price) * 100
 
         if drop_pct >= threshold:
-            link = item.get("link", "")
+            seen.add(name)
+            link     = item.get("link", "")
+            retailer = item.get("retailer", previous[name].get("retailer", "unknown"))
 
             # ── Score this drop ───────────────────────────────────────────
             deal_score = score_drop(
@@ -93,22 +104,24 @@ def check_for_drops(
             )
             deal_grade = get_grade(deal_score)
 
-            _console_alert(name, old_price, new_price, link, drop_pct, deal_score, deal_grade)
+            _console_alert(name, old_price, new_price, link, drop_pct, deal_score, deal_grade, retailer)
 
             if email_enabled and receiver:
                 subject = f"[{deal_grade}] GPU Deal: {name} dropped {drop_pct:.1f}%"
                 body    = (
                     f"Deal score: {deal_score}/100  (Grade {deal_grade})\n\n"
-                    f"Product : {name}\n"
-                    f"Old     : ${old_price:.2f}\n"
-                    f"New     : ${new_price:.2f}\n"
-                    f"Drop    : {drop_pct:.1f}%\n"
-                    f"Link    : {link}"
+                    f"Product  : {name}\n"
+                    f"Retailer : {retailer}\n"
+                    f"Old      : ${old_price:.2f}\n"
+                    f"New      : ${new_price:.2f}\n"
+                    f"Drop     : {drop_pct:.1f}%\n"
+                    f"Link     : {link}"
                 )
                 _send_email(subject, body, receiver)
 
             drops.append({
                 "name":      name,
+                "retailer":  retailer,
                 "old_price": old_price,
                 "new_price": new_price,
                 "drop_pct":  round(drop_pct, 2),

@@ -16,6 +16,7 @@ from app.alerts import check_for_drops
 from app.scoring import score_drop, grade
 from app.config import SEARCH_QUERIES
 from app.routers import auth as auth_router
+from app.auth import get_current_user
 from app.routers import settings as settings_router
 from app.scheduler import start_scheduler, scheduler
 
@@ -35,9 +36,6 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# ── CORS ──────────────────────────────────────────────────────────────────────
-# Allows the React dashboard and Chrome extension to call the API from a browser.
-# In production, replace "*" with your actual frontend domain.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -86,7 +84,7 @@ async def run_scrape_cycle(queries: list[str]):
             )
             prev_rows = prev_result.scalars().all()
             previous  = {
-                row.name: {"price": row.price, "link": row.link}
+                row.name: {"price": row.price, "link": row.link, "retailer": row.retailer}
                 for row in prev_rows
             }
 
@@ -133,6 +131,7 @@ async def run_scrape_cycle(queries: list[str]):
                     session.add(PriceAlert(
                         user_id   = user.id,
                         gpu_name  = drop["name"],
+                        retailer  = drop.get("retailer", "unknown"),
                         old_price = drop["old_price"],
                         new_price = drop["new_price"],
                         drop_pct  = drop["drop_pct"],
@@ -158,12 +157,6 @@ async def get_latest_prices(
     cursor:   str | None = Query(default=None, description="scraped_at timestamp from last result, ISO format"),
     session:  AsyncSession = Depends(get_async_session),
 ):
-    """
-    Returns the latest price per GPU, sorted by deal score descending.
-
-    Pagination: pass `cursor` (the `scraped_at` of the last item you received)
-    to get the next page. Use `limit` to control page size (default 50, max 200).
-    """
     stmt = select(GPUPrice).order_by(GPUPrice.scraped_at.desc())
     if query:
         stmt = stmt.where(GPUPrice.query == query)
@@ -268,17 +261,16 @@ async def get_price_history(
 
 @app.get("/alerts", response_model=list[PriceAlertResponse])
 async def get_alerts(
-    limit:   int        = Query(default=50, ge=1, le=200),
-    cursor:  str | None = Query(default=None, description="created_at timestamp from last result, ISO format"),
-    session: AsyncSession = Depends(get_async_session),
+    limit:        int        = Query(default=50, ge=1, le=200),
+    cursor:       str | None = Query(default=None, description="created_at timestamp from last result, ISO format"),
+    session:      AsyncSession = Depends(get_async_session),
+    current_user: User = Depends(get_current_user),
 ):
-    """
-    Returns price drop alerts sorted by deal score descending.
-
-    Pagination: pass `cursor` (the `created_at` of the last item you received)
-    to get the next page.
-    """
-    stmt = select(PriceAlert).order_by(desc(PriceAlert.score), desc(PriceAlert.created_at))
+    stmt = (
+        select(PriceAlert)
+        .where(PriceAlert.user_id == current_user.id)
+        .order_by(desc(PriceAlert.score), desc(PriceAlert.created_at))
+    )
     if cursor:
         try:
             cursor_dt = datetime.fromisoformat(cursor)

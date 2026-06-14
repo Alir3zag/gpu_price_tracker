@@ -26,6 +26,7 @@ class GPUPriceResponse(BaseModel):
 class PriceAlertResponse(BaseModel):
     id:         str
     gpu_name:   str
+    retailer:   str | None = None
     old_price:  float
     new_price:  float
     drop_pct:   float
@@ -41,17 +42,17 @@ class PriceAlertResponse(BaseModel):
 # ── User Settings ─────────────────────────────────────────────────────────────
 
 class UserSettingsUpdate(BaseModel):
-    email_enabled:        bool        = False
-    alert_threshold:      float       = 5.0
-    check_interval_hours: float       = 6.0
-    search_queries:       list[str]   = ["3090", "3080", "4090"]
+    email_enabled:        bool      = False
+    alert_threshold:      float     = 5.0
+    check_interval_hours: float     = 6.0
+    search_queries:       list[str] = ["3090", "3080", "4090"]
 
 
 class UserSettingsResponse(BaseModel):
     email_enabled:        bool
     alert_threshold:      float
     check_interval_hours: float
-    search_queries:       list[str]   # returned as a list, stored as comma-separated string
+    search_queries:       list[str]
 
     class Config:
         from_attributes = True

@@ -25,7 +25,7 @@ class User(Base):
 
     id         = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     email      = Column(String, nullable=False, unique=True)
-    password   = Column(String, nullable=False)             # hashed — never plain text
+    password   = Column(String, nullable=False)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     settings   = relationship("UserSettings", back_populates="user", uselist=False, cascade="all, delete-orphan")
     alerts     = relationship("PriceAlert", back_populates="user", cascade="all, delete-orphan")
@@ -34,13 +34,13 @@ class User(Base):
 class UserSettings(Base):
     __tablename__ = "user_settings"
 
-    id                     = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    user_id                = Column(String, ForeignKey("users.id"), nullable=False, unique=True)
-    email_enabled          = Column(Boolean, default=False)
-    alert_threshold        = Column(Float, default=5.0)         # % drop to trigger alert
-    check_interval_hours   = Column(Float, default=6.0)
-    search_queries         = Column(String, default="3090,3080,4090")   # comma-separated
-    user                   = relationship("User", back_populates="settings")
+    id                   = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id              = Column(String, ForeignKey("users.id"), nullable=False, unique=True)
+    email_enabled        = Column(Boolean, default=False)
+    alert_threshold      = Column(Float, default=5.0)
+    check_interval_hours = Column(Float, default=6.0)
+    search_queries       = Column(String, default="3090,3080,4090")
+    user                 = relationship("User", back_populates="settings")
 
 
 class GPUPrice(Base):
@@ -62,6 +62,7 @@ class PriceAlert(Base):
     id         = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     user_id    = Column(String, ForeignKey("users.id"), nullable=False)
     gpu_name   = Column(String, nullable=False)
+    retailer   = Column(String, default="unknown")
     old_price  = Column(Float, nullable=False)
     new_price  = Column(Float, nullable=False)
     drop_pct   = Column(Float, nullable=False)
@@ -84,4 +85,3 @@ async def create_db_and_tables():
 async def get_async_session() -> AsyncGenerator[AsyncSession, None]:
     async with async_session() as session:
         yield session
-        
