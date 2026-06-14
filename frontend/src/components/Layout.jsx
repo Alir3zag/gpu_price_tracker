@@ -19,9 +19,8 @@ export default function Layout({ children }) {
 
   return (
     <div style={{ display: 'flex', minHeight: '100vh', background: 'var(--bg-base)' }}>
-      {/* Sidebar */}
       <aside style={{
-        width: 220,
+        width: 210,
         flexShrink: 0,
         background: 'var(--bg-card)',
         borderRight: '1px solid var(--border)',
@@ -30,26 +29,28 @@ export default function Layout({ children }) {
         position: 'fixed',
         top: 0, left: 0, bottom: 0,
       }}>
-        {/* Logo */}
-        <div style={{ padding: '24px 20px 20px', borderBottom: '1px solid var(--border)' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        {/* Logo — single line */}
+        <div style={{ padding: '18px 16px 16px', borderBottom: '1px solid var(--border)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <div style={{
-              width: 32, height: 32,
+              width: 26, height: 26,
               background: 'var(--accent-dim)',
               border: '1px solid var(--accent)',
-              borderRadius: 7,
+              borderRadius: 6,
               display: 'flex', alignItems: 'center', justifyContent: 'center',
-              fontSize: 14,
+              fontSize: 12, flexShrink: 0,
             }}>⬡</div>
-            <div>
-              <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)', fontFamily: 'JetBrains Mono, monospace' }}>GPU</div>
-              <div style={{ fontSize: 10, color: 'var(--accent)', letterSpacing: '0.12em', fontWeight: 600 }}>TRACKER</div>
-            </div>
+            <span style={{
+              fontSize: 14, fontWeight: 700,
+              fontFamily: 'JetBrains Mono, monospace',
+              color: 'var(--text-primary)',
+              letterSpacing: '-0.01em',
+            }}>GPU Tracker</span>
           </div>
         </div>
 
-        {/* Nav links */}
-        <nav style={{ padding: '12px 10px', flex: 1 }}>
+        {/* Nav */}
+        <nav style={{ padding: '10px 8px', flex: 1 }}>
           {NAV.map(({ to, label, icon }) => (
             <NavLink
               key={to}
@@ -57,9 +58,9 @@ export default function Layout({ children }) {
               style={({ isActive }) => ({
                 display: 'flex',
                 alignItems: 'center',
-                gap: 10,
-                padding: '9px 12px',
-                borderRadius: 7,
+                gap: 9,
+                padding: '8px 10px',
+                borderRadius: 6,
                 marginBottom: 2,
                 textDecoration: 'none',
                 fontSize: 13,
@@ -70,40 +71,58 @@ export default function Layout({ children }) {
                 transition: 'all 0.15s',
               })}
             >
-              <span style={{ fontSize: 14, opacity: 0.8 }}>{icon}</span>
+              <span style={{ fontSize: 13, opacity: 0.7 }}>{icon}</span>
               {label}
             </NavLink>
           ))}
         </nav>
 
-        {/* User + logout */}
-        <div style={{ padding: '16px 14px', borderTop: '1px solid var(--border)' }}>
+        {/* User footer */}
+        <div style={{ padding: '12px 12px', borderTop: '1px solid var(--border)' }}>
           {user && (
-            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 10, wordBreak: 'break-all' }}>
-              {user.email}
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 7,
+              marginBottom: 8,
+            }}>
+              <div style={{
+                width: 22, height: 22, borderRadius: '50%',
+                background: 'var(--accent-dim)',
+                border: '1px solid var(--accent)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontSize: 10, color: 'var(--accent)', fontWeight: 700, flexShrink: 0,
+              }}>
+                {user.email?.[0]?.toUpperCase()}
+              </div>
+              <div style={{
+                fontSize: 11, color: 'var(--text-muted)',
+                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                flex: 1,
+              }}>
+                {user.email}
+              </div>
             </div>
           )}
           <button
             onClick={handleLogout}
             style={{
               width: '100%',
-              padding: '8px 12px',
+              padding: '7px 10px',
               background: 'transparent',
               border: '1px solid var(--border-light)',
-              color: 'var(--text-secondary)',
-              borderRadius: 6,
+              color: 'var(--text-muted)',
+              borderRadius: 5,
               fontSize: 12,
               textAlign: 'left',
-              display: 'flex', alignItems: 'center', gap: 8,
+              display: 'flex', alignItems: 'center', gap: 7,
+              cursor: 'pointer',
             }}
           >
-            <span>↩</span> Sign out
+            <span style={{ fontSize: 11 }}>↩</span> Sign out
           </button>
         </div>
       </aside>
 
-      {/* Main content */}
-      <main style={{ marginLeft: 220, flex: 1, minHeight: '100vh', padding: '28px 32px' }}>
+      <main style={{ marginLeft: 210, flex: 1, minHeight: '100vh', padding: '24px 28px' }}>
         {children}
       </main>
     </div>
