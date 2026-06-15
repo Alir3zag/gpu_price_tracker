@@ -222,8 +222,8 @@ gpu_price_tracker/
 - [x] Stage 8 — PostgreSQL migration
 - [x] Stage 9 — React frontend (Vite + Tailwind + Recharts)
 - [x] Stage 10 — Deployment (Render + Vercel)
-- [ ] Stage 11 — Tests (pytest + pytest-asyncio)
-- [ ] Stage 12 — README screenshots + demo GIF
+- [x] Stage 11 — Tests (45 tests — auth, prices, alerts, scoring, settings)
+- [ ] Stage 12 — Screenshots + demo GIF
 
 ---
 
