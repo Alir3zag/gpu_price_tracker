@@ -187,7 +187,7 @@ export default function Settings() {
             </span>
           </label>
 
-          {form.email_enabled && (
+          <div style={{ display: form.email_enabled ? 'block' : 'none' }}>
             <Field label="Email address">
               <input
                 type="email"
@@ -197,7 +197,7 @@ export default function Settings() {
                 style={{ width: '100%' }}
               />
             </Field>
-          )}
+          </div>
         </div>
 
         <button
