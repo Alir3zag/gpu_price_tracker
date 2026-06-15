@@ -46,6 +46,7 @@ class UserSettingsUpdate(BaseModel):
     alert_threshold:      float     = 5.0
     check_interval_hours: float     = 6.0
     search_queries:       list[str] = ["3090", "3080", "4090"]
+    email_address:        str       = ""
 
 
 class UserSettingsResponse(BaseModel):
@@ -53,6 +54,7 @@ class UserSettingsResponse(BaseModel):
     alert_threshold:      float
     check_interval_hours: float
     search_queries:       list[str]
+    email_address:        str = ""
 
     class Config:
         from_attributes = True

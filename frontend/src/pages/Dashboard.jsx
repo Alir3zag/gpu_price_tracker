@@ -244,8 +244,8 @@ export default function Dashboard() {
   const lastScrape = prices.length ? prices[0]?.scraped_at : null
   const bestDeals = prices.filter(p => p.score && p.score >= 40).slice(0, 5)
   const recentAlerts = alerts
-  .filter((a, i, arr) => arr.findIndex(x => x.gpu_name === a.gpu_name) === i)
-  .slice(0, 5)
+    .filter((a, i, arr) => arr.findIndex(x => x.gpu_name === a.gpu_name) === i)
+    .slice(0, 5)
 
   return (
     <div>

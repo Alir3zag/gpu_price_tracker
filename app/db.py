@@ -37,6 +37,7 @@ class UserSettings(Base):
     id                   = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     user_id              = Column(String, ForeignKey("users.id"), nullable=False, unique=True)
     email_enabled        = Column(Boolean, default=False)
+    email_address        = Column(String, default="")
     alert_threshold      = Column(Float, default=5.0)
     check_interval_hours = Column(Float, default=6.0)
     search_queries       = Column(String, default="3090,3080,4090")
