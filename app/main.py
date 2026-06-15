@@ -40,7 +40,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:5173",
-        "https://gpu-tracker-frontend.vercel.app",  # placeholder, update after Vercel deploy
+        "https://gpupricetracker-ftjfijjis-alireza-s-projects5.vercel.app",
     ],
     allow_credentials=False,
     allow_methods=["*"],
