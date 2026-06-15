@@ -1,6 +1,6 @@
 # app/db.py
 from collections.abc import AsyncGenerator
-from datetime import datetime, timezone
+from datetime import datetime
 import uuid
 import os
 
@@ -26,7 +26,7 @@ class User(Base):
     id         = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     email      = Column(String, nullable=False, unique=True)
     password   = Column(String, nullable=False)
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime, default=datetime.utcnow)
     settings   = relationship("UserSettings", back_populates="user", uselist=False, cascade="all, delete-orphan")
     alerts     = relationship("PriceAlert", back_populates="user", cascade="all, delete-orphan")
 
@@ -53,7 +53,7 @@ class GPUPrice(Base):
     link       = Column(String)
     query      = Column(String)
     retailer   = Column(String, default="newegg")
-    scraped_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    scraped_at = Column(DateTime, default=datetime.utcnow)
 
 
 class PriceAlert(Base):
@@ -69,7 +69,7 @@ class PriceAlert(Base):
     score      = Column(Float, default=0.0)
     grade      = Column(String, default="D")
     link       = Column(String)
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime, default=datetime.utcnow)
     user       = relationship("User", back_populates="alerts")
 
 
