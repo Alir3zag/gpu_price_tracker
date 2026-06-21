@@ -318,7 +318,7 @@ export default function Dashboard() {
             </div>
           ) : bestDeals.length === 0 ? (
             <div style={{ padding: '32px 16px', textAlign: 'center', color: 'var(--text-muted)', fontSize: 13 }}>
-              No scored deals yet — run a scrape to find opportunities.
+              🚀 Ready to find deals — click ▶ Run Scrape to fetch live GPU prices across Newegg, Walmart, Amazon and eBay.
             </div>
           ) : (
             bestDeals.map((p, i) => <BestDealCard key={i} price={p} />)
@@ -352,7 +352,7 @@ export default function Dashboard() {
             </div>
           ) : alerts.length === 0 ? (
             <div style={{ padding: '32px 16px', textAlign: 'center', color: 'var(--text-muted)', fontSize: 13 }}>
-              No price drops detected yet.<br />
+              No price drops detected yet — run a second scrape to compare prices and surface deals.<br />
               <span style={{ fontSize: 11, marginTop: 6, display: 'block' }}>
                 Run a second scrape to compare prices.
               </span>
