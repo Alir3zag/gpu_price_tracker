@@ -71,17 +71,6 @@ async def health():
     return {"status": "ok", "version": "1.0.0"}
 
 
-# ── Temp migration endpoint — remove after running once ───────────────────────
-
-@app.post("/admin/migrate", include_in_schema=False)
-async def run_migration(session: AsyncSession = Depends(get_async_session)):
-    await session.execute(
-        text("ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS email_address VARCHAR DEFAULT ''")
-    )
-    await session.commit()
-    return {"status": "done"}
-
-
 # ── Scrape (manual trigger) ───────────────────────────────────────────────────
 
 @app.post("/scrape", status_code=202)
