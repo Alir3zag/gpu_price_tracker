@@ -1,10 +1,15 @@
 # app/main.py
-from fastapi import FastAPI, HTTPException, Depends, BackgroundTasks, Query
+from fastapi import FastAPI, HTTPException, Depends, BackgroundTasks, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, desc
+from sqlalchemy import select, desc, text
 from contextlib import asynccontextmanager
 from datetime import datetime
+import os
 
 from app.db import (
     create_db_and_tables, get_async_session,
@@ -19,6 +24,14 @@ from app.routers import auth as auth_router
 from app.auth import get_current_user
 from app.routers import settings as settings_router
 from app.scheduler import start_scheduler, scheduler
+
+# ── Rate limiter ──────────────────────────────────────────────────────────────
+limiter = Limiter(key_func=get_remote_address)
+
+ALLOWED_ORIGINS = [
+    "http://localhost:5173",
+    os.getenv("FRONTEND_URL", "https://gpupricetracker-ftjfijjis-alireza-s-projects5.vercel.app"),
+]
 
 
 @asynccontextmanager
@@ -36,12 +49,12 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "https://gpupricetracker-ftjfijjis-alireza-s-projects5.vercel.app",
-    ],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -51,10 +64,30 @@ app.include_router(auth_router.router)
 app.include_router(settings_router.router)
 
 
+# ── Health check ──────────────────────────────────────────────────────────────
+
+@app.get("/health")
+async def health():
+    return {"status": "ok", "version": "1.0.0"}
+
+
+# ── Temp migration endpoint — remove after running once ───────────────────────
+
+@app.post("/admin/migrate", include_in_schema=False)
+async def run_migration(session: AsyncSession = Depends(get_async_session)):
+    await session.execute(
+        text("ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS email_address VARCHAR DEFAULT ''")
+    )
+    await session.commit()
+    return {"status": "done"}
+
+
 # ── Scrape (manual trigger) ───────────────────────────────────────────────────
 
 @app.post("/scrape", status_code=202)
+@limiter.limit("5/minute")
 async def trigger_scrape(
+    request: Request,
     background_tasks: BackgroundTasks,
     queries: list[str] = SEARCH_QUERIES,
 ):
@@ -63,16 +96,38 @@ async def trigger_scrape(
     return {"detail": f"Scrape started for: {queries}"}
 
 
-async def run_scrape_cycle(queries: list[str]):
+async def run_scrape_cycle(queries: list[str] | None = None):
     import asyncio
     from sqlalchemy import func
     try:
+        async with async_session() as session:
+            users_result = await session.execute(select(User))
+            users = users_result.scalars().all()
+
+            if not users:
+                print("[scrape] No users registered yet")
+                return
+
+            all_queries: set[str] = set(queries or SEARCH_QUERIES)
+            user_settings_map: dict[str, UserSettings] = {}
+
+            for user in users:
+                settings_result = await session.execute(
+                    select(UserSettings).where(UserSettings.user_id == user.id)
+                )
+                user_settings = settings_result.scalars().first()
+                user_settings_map[user.id] = user_settings
+                if user_settings and user_settings.search_queries:
+                    user_queries = [q.strip() for q in user_settings.search_queries.split(",") if q.strip()]
+                    all_queries.update(user_queries)
+
+        print(f"[scrape] Running with queries: {sorted(all_queries)}")
+
         loop = asyncio.get_event_loop()
-        current = await loop.run_in_executor(None, scrape_all, queries)
+        current = await loop.run_in_executor(None, scrape_all, list(all_queries))
         print(f"[scrape] Scraped {len(current)} items")
 
         async with async_session() as session:
-            # ── Step 1: fetch previous prices BEFORE inserting ────────────
             subq = (
                 select(GPUPrice.name, func.max(GPUPrice.scraped_at).label("latest"))
                 .group_by(GPUPrice.name)
@@ -86,12 +141,11 @@ async def run_scrape_cycle(queries: list[str]):
                 )
             )
             prev_rows = prev_result.scalars().all()
-            previous  = {
+            previous = {
                 row.name: {"price": row.price, "link": row.link, "retailer": row.retailer}
                 for row in prev_rows
             }
 
-            # ── Step 2: fetch full price history for scorer ───────────────
             history_result = await session.execute(
                 select(GPUPrice).order_by(GPUPrice.name, GPUPrice.scraped_at.asc())
             )
@@ -100,7 +154,6 @@ async def run_scrape_cycle(queries: list[str]):
             for row in history_rows:
                 price_history.setdefault(row.name, []).append(row.price)
 
-            # ── Step 3: insert new prices ─────────────────────────────────
             for item in current:
                 if not item.get("name") or not item.get("price"):
                     continue
@@ -114,23 +167,38 @@ async def run_scrape_cycle(queries: list[str]):
                 ))
             await session.commit()
 
-            # ── Step 4: check drops and alert each user ───────────────────
-            users_result = await session.execute(select(User))
-            users = users_result.scalars().all()
-
             for user in users:
-                settings_result = await session.execute(
-                    select(UserSettings).where(UserSettings.user_id == user.id)
-                )
-                user_settings = settings_result.scalars().first()
+                user_settings = user_settings_map.get(user.id)
+
+                user_queries = set(SEARCH_QUERIES)
+                if user_settings and user_settings.search_queries:
+                    user_queries = {q.strip() for q in user_settings.search_queries.split(",") if q.strip()}
+
+                user_current = [
+                    item for item in current
+                    if item.get("query") in user_queries
+                ]
+
                 drops = check_for_drops(
                     previous      = previous,
-                    current       = current,
+                    current       = user_current,
                     settings      = user_settings,
                     user_email    = user.email,
                     price_history = price_history,
                 )
+
                 for drop in drops:
+                    existing = await session.execute(
+                        select(PriceAlert).where(
+                            PriceAlert.user_id   == user.id,
+                            PriceAlert.gpu_name  == drop["name"],
+                            PriceAlert.new_price == drop["new_price"],
+                        ).limit(1)
+                    )
+                    if existing.scalars().first():
+                        print(f"[scrape] Skipping duplicate alert for {drop['name']} @ ${drop['new_price']}")
+                        continue
+
                     session.add(PriceAlert(
                         user_id   = user.id,
                         gpu_name  = drop["name"],
@@ -175,7 +243,6 @@ async def get_latest_prices(
     result = await session.execute(stmt)
     prices = result.scalars().all()
 
-    # Dedupe to latest price per GPU name
     seen, latest = set(), []
     for p in prices:
         if p.name not in seen:
@@ -187,7 +254,6 @@ async def get_latest_prices(
     if not latest:
         return []
 
-    # Fetch full price history for scoring
     history_result = await session.execute(
         select(GPUPrice).order_by(GPUPrice.name, GPUPrice.scraped_at.asc())
     )
@@ -196,10 +262,8 @@ async def get_latest_prices(
     for row in history_rows:
         price_history.setdefault(row.name, []).append(row.price)
 
-    # Build all_current for cross-retailer scoring
     all_current = [{"name": p.name, "price": p.price} for p in latest]
 
-    # Attach score and grade to each result
     output = []
     for p in latest:
         history = price_history.get(p.name, [p.price])
